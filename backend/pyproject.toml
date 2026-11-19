@@ -1,0 +1,6 @@
+[project]
+name = "tio"
+version = "0.1.0"
+description = "TIO API"
+requires-python = ">=3.12"
+dependencies = ["fastapi", "uvicorn"]

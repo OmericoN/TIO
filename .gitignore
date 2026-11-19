@@ -1,0 +1,11 @@
+.venv/
+__pycache__/
+.uv-cache/
+.bun-cache/
+
+node_modules/
+dist/
+
+.env
+.env.*
+!.env.example
