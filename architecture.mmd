@@ -4,17 +4,22 @@ flowchart TD
     PLAYER -->|Listener starts speaking| SCHEDULE["FastAPI selects the next speaker and tracks interruptions"]
     STT -->|Committed listener turn| HISTORY
 
-    PROFILE["Active headline and listener preferences"] --> RECOMMENDER["Recommender ranks eligible personas using embeddings"]
+    CORPUS["Multilingual articles and public releases"] --> INDEX["Shared event index with original passages"]
+    INDEX --> RUNDOWN["Select ordered stories for listener profile and duration"]
+    RUNDOWN --> RECOMMENDER["Rank eligible guest experts for each event"]
     CATALOG["Persona catalog with expertise, prompts, model settings and voice IDs"] --> RECOMMENDER
+    CATALOG --> MODERATOR["Main host introduces panel and headlines, questions experts and closes"]
+    MODERATOR --> SCHEDULE
     RECOMMENDER -->|Ranked host IDs| SCHEDULE
     HISTORY["Ordered listener and host turns"] --> SCHEDULE
 
     SCHEDULE -->|Chosen host and turn to answer| LOOKUP["Retrieve a bounded set of original passages"]
-    INDEX["Shared article and official release index"] --> LOOKUP
+    INDEX --> REVIEW["Compare common ground, measurement bases and disputed figures"]
+    REVIEW --> LOOKUP
     LOOKUP --> HOST["Call the chosen host model with its persona and recent turns"]
     HOST -->|Host turn with claim citations| VERIFY["Verify quotes and figures against original sources"]
     VERIFY -->|Approved turn with citations| CURRENT{"Is the turn still current?"}
-    VERIFY -->|Insufficient support| STATUS["Show that the sources could not answer"]
+    VERIFY -->|Still unsupported after one repair| STATUS["Render uncertainty statement"]
     STATUS --> PLAYER
     CURRENT -->|Superseded| DROP["Discard stale turn"]
     CURRENT -->|Current| TTS["Render or reuse audio in the selected host's ElevenLabs voice"]

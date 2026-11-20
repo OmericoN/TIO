@@ -16,7 +16,7 @@ The [full project brief](docs/project-brief.md) records the judging criteria, de
 - **Tailor the briefing.** Choose the stories, order, and depth for each listener profile. Choose presenter or two-host debate mode independently of the profile.
 - **Show the evidence as you listen.** Link every spoken claim and number to its source article. Show the supporting article and excerpt for the active segment, and flag conflicts between sources.
 
-The current app runs a microphone-based live host preview through ElevenLabs. The backend also includes article-to-host matching and next-speaker selection. The end-to-end briefing pipeline and synchronized source view are planned.
+After signing in, open **Discussion** for a briefing with a main host and up to two recommended guest experts. The player shows the active segment’s cited passages and accepts spoken or typed questions. Open **Live host** for the standalone voice preview. See the [panel engine guide](docs/panel-engine.md) for provider setup, source indexing and cost measurement.
 
 ## Run locally
 

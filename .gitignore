@@ -9,7 +9,8 @@ dist/
 .env
 .env.*
 !.env.example
-
-# Local seed data (plaintext test passwords, Newstex headlines) and run logs
+# Local event data, seed data and run logs
 data_parser/seed/
 *.log
+.briefing/
+data_parser/data_files/*.jsonl

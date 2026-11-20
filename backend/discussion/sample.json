@@ -1,0 +1,59 @@
+[
+  {
+    "id": "sample-revenue",
+    "headline": "Aster Works reports quarterly revenue growth",
+    "articles": [
+      {
+        "id": "sample-revenue0",
+        "headline": "Aster Works reports quarterly revenue growth",
+        "language": "en",
+        "publisher": "Sample Markets",
+        "published": "2026-11-20",
+        "url": null,
+        "body": "Aster Works estimated that quarterly revenue rose 8% year over year. The estimate covers continuing operations."
+      },
+      {
+        "id": "sample-revenue1",
+        "headline": "Aster Works reports quarterly revenue growth",
+        "language": "de",
+        "publisher": "Sample Wirtschaft",
+        "published": "2026-11-20",
+        "url": null,
+        "body": "Aster Works meldete für das Quartal ein Umsatzplus von 6% gegenüber dem Vorjahr. Die Zahl umfasst alle Geschäftsbereiche."
+      },
+      {
+        "id": "sample-revenue2",
+        "headline": "Aster Works reports quarterly revenue growth",
+        "language": "nl",
+        "publisher": "Sample Economie",
+        "published": "2026-11-20",
+        "url": null,
+        "body": "Aster Works rapporteerde dit kwartaal een hogere omzet dan een jaar eerder. Voor alle bedrijfsonderdelen samen schat de redactie de omzetgroei op 7% ten opzichte van hetzelfde kwartaal vorig jaar."
+      }
+    ]
+  },
+  {
+    "id": "sample-rates",
+    "headline": "Aster Reserve leaves its policy rate unchanged",
+    "articles": [
+      {
+        "id": "sample-rates0",
+        "headline": "Aster Reserve leaves its policy rate unchanged",
+        "language": "en",
+        "publisher": "Sample Finance",
+        "published": "2026-11-20",
+        "url": null,
+        "body": "Aster Reserve held its policy rate at 3% in its quarterly decision."
+      },
+      {
+        "id": "sample-rates1",
+        "headline": "Aster Reserve leaves its policy rate unchanged",
+        "language": "nl",
+        "publisher": "Sample Economie",
+        "published": "2026-11-20",
+        "url": null,
+        "body": "Aster Reserve hield de beleidsrente ongewijzigd op 3%."
+      }
+    ]
+  }
+]

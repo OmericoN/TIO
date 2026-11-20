@@ -1,6 +1,6 @@
 # Live voice and discussion
 
-The [ElevenAgents preview](#test-the-existing-elevenagents-preview) is available in the current app. These notes also cover the proposed multi-host discussion flow.
+The [panel engine guide](panel-engine.md) describes the implemented moderated discussion. These notes cover the underlying speaker utilities and the [standalone ElevenAgents preview](#test-the-existing-elevenagents-preview).
 
 In the proposed discussion flow, each host has its own persona Markdown, model settings, and ElevenLabs voice ID. FastAPI will call the selected host's model with the current headline, listener preferences, relevant excerpts, and the recent conversation. The same underlying model can power multiple hosts through separate calls with distinct instructions.
 
@@ -47,6 +47,6 @@ $session = Invoke-RestMethod -Method Post -Uri http://127.0.0.1:8000/api/voice/s
 [bool]($session.token -and $session.conversation_id -and $session.system_prompt)
 ```
 
-`True` confirms session setup for the [FastAPI route](../backend/api/voice.py). The full discussion still needs Scribe token issuance, live turn scheduling, model execution, and verified TTS playback.
+`True` confirms session setup for the [preview route](../backend/api/voice.py). The briefing player uses its own session and transcription routes.
 
 Keep the development servers bound to localhost. Add application authentication and a session rate limit before exposing token issuance through a public server or proxy.

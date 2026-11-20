@@ -31,6 +31,6 @@ Start from a headline, give a short host introduction, and play the story in pre
 
 The handoff recommends a script-to-audio pipeline and suggests OpenAI for text stages and ElevenLabs for voice. Provider selection, model IDs, account access, budget, and voice casting remain open. Confirm the dataset schema, language mix, and supplied profiles at handover. The organizer PDF governs challenge requirements where the handoff differs.
 
-The proposed [live discussion architecture](../architecture.mmd) lets the listener and several hosts take turns. FastAPI selects the next speaker, each host's model generates its own turn, and ElevenLabs renders the verified text in that host's voice.
+The [live discussion architecture](../architecture.mmd) gives the main host and recommended guest experts separate roles. FastAPI manages the floor, verifies claim-level citations and hands approved segments to ElevenLabs. The [engine guide](panel-engine.md) covers local setup and the judging run.
 
 Source context supplied for this project includes the organizer's *Sourcera Track Description* and the team's *Sourcera audio briefing: build handoff*.

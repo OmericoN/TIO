@@ -2,6 +2,7 @@ import { useState } from 'react'
 import type { FormEvent } from 'react'
 import { DiscussionPreview } from './DiscussionPreview'
 import { LiveHostPreview } from './LiveHostPreview'
+import { PanelPlayer } from './PanelPlayer'
 
 const sampleHeadlines = [
   { topic: 'Technology', title: 'The infrastructure behind the AI boom', summary: 'Why chips, power and data centers are shaping where the next wave of investment goes.' },
@@ -78,6 +79,9 @@ export function NewsWorkspace() {
                       </div>
                     ))}
                   </dl>
+                  <button type="button" onClick={() => setView('discussion')} className="mt-4 rounded-lg bg-[#263a33] px-3.5 py-2 text-sm font-medium text-white">
+                    Open audio briefing
+                  </button>
                 </section>
                 <ul className="divide-y divide-[#e6e4de]">
                   {sampleHeadlines.map(({ topic, title, summary }) => (
@@ -118,7 +122,15 @@ export function NewsWorkspace() {
             </footer>
           </>
         ) : view === 'discussion' ? (
-          <DiscussionPreview />
+          <div className="min-h-0 flex-1 overflow-y-auto px-5 py-5 sm:px-8">
+            <div className="mx-auto max-w-3xl">
+              <PanelPlayer />
+              <details className="mt-8 rounded-xl border border-[#e6e4de] bg-white">
+                <summary className="cursor-pointer px-4 py-3 text-sm font-medium">Sample cited discussion</summary>
+                <DiscussionPreview />
+              </details>
+            </div>
+          </div>
         ) : (
           <div className="min-h-0 overflow-y-auto px-5 py-5 sm:px-8">
             <div className="mx-auto max-w-3xl"><LiveHostPreview /></div>
