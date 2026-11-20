@@ -9,10 +9,13 @@ from fastapi import HTTPException
 from pydantic import ValidationError
 
 from api import panel as api
+from briefing.generate import generate
 from discussion.costs import project
 from discussion.panel import review_event
+from recommender.recommend import Listener
 from research.matcher import Classifications, PersonaMatcher
 from research.openai_client import OpenAIClient
+from tests.test_briefing import art
 from tests.test_panel import fixture
 
 
@@ -116,6 +119,69 @@ class MatchedPanelTest(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual([s.headline for s in panel.stories], [self.rates.headline])
                 self.assertEqual(panel.roster, expected)
                 self.get_matcher.assert_not_called()
+
+    async def test_generated_plan_plays_every_selected_story_with_sources(self):
+        host_id = str(self.source.host)
+        guests = list(map(str, self.guests))
+        article_ids = [a.id for a in self.revenue.articles + self.rates.articles]
+        article_rows = dict(art(a.id, (1, 0) if a in self.rates.articles else (0, 1),
+                                pub=a.publisher) for a in self.ordered)
+        repository = Mock()
+        repository.get_articles_by_ids.return_value = {i: dict(id=i, categories=[]) for i in article_ids}
+        repository.get_personas_by_ids.return_value = {i: dict(id=i) for i in guests}
+        matcher = PersonaMatcher(repository, self.client)
+        conn = Mock()
+        conn.execute.return_value.fetchone.return_value = (host_id,)
+        conn.execute.return_value.fetchall.return_value = [(144,)]
+        listener = Listener([1, 0], ["en", "de", "nl"], preferences="Explain the numbers")
+        selected = [self.rates.articles[1].id, self.revenue.articles[0].id]
+        with (patch("briefing.generate.load_listener", return_value=listener),
+              patch("briefing.generate.rank_hosts", return_value=[host_id, *guests]),
+              patch("briefing.generate.host_affinity", return_value={}),
+              patch("briefing.generate.load_articles", return_value=article_rows)):
+            plan = generate(conn, "fixture", article_ids, selected, 1, "debate", matcher=matcher)
+        self.assertGreater(plan["estimated_minutes"], 1)
+        self.assertEqual(plan["hosts"], guests)
+        self.assertEqual(list(plan["tones"]), plan["article_ids"])
+        self.db.execute.side_effect = [self.cast, self.articles]
+        result = await api.start_panel(api.Start(profile=plan["profile"], mode="panel", minutes=1,
+            briefing_plan={key: plan[key] for key in ("segments", "hosts", "tones")}))
+        self.assertFalse(result["sample"])
+        key = result["id"]
+        self.addCleanup(api.sessions.pop, key, None)
+        panel = api.sessions[key].panel
+        self.assertEqual([story.id for story in panel.stories], selected)
+        self.assertEqual(panel.story_budgets, {s["article_ids"][0]: s["estimated_seconds"] for s in plan["segments"]})
+        self.assertEqual([a.id for story in panel.stories for a in story.articles], plan["article_ids"])
+        self.assertNotIn("session_grouping", [call.args[0] for call in self.client.generate.call_args_list])
+        with patch.object(api, "eleven", return_value=b"mp3"):
+            step = api.Step(generation=0)
+            for story in panel.stories:
+                for _ in range(2):  # opening and closing at the planned duration
+                    segment = await api.next_segment(key, step)
+                    self.assertEqual(segment["story"], story.headline)
+                    card, = segment["sources"]
+                    source = next(a for a in story.articles if a.id == card["id"])
+                    self.assertIn(card["quote"], source.body)
+                    self.assertIn(card["claim"], segment["text"])
+                    self.assertEqual(self.client.generate.call_args.args[2]["context"]["listener_preferences"],
+                                     listener.preferences)
+                    step = api.Step(generation=0, heard=segment["id"], seconds=panel.story_budgets[story.id])
+            self.assertEqual(await api.next_segment(key, step), {"done": True})
+
+    async def test_planned_presenter_and_more_than_fifteen_sources(self):
+        article_ids = [f"source-{i}" for i in range(16)]
+        source = self.articles[0]
+        self.db.execute.side_effect = [self.cast, [{**source, "id": i} for i in article_ids]]
+        start = api.Start(profile="Listener", mode="presenter", minutes=16.5, briefing_plan={
+            "segments": [{"article_ids": article_ids, "estimated_seconds": 60}],
+            "hosts": [self.guests[0]], "tones": {},
+        })
+        result = await api.start_panel(start)
+        panel = api.sessions.pop(result["id"]).panel
+        self.assertEqual(panel.speaker(), self.guests[0])
+        self.assertEqual([a.id for a in panel.story.articles], article_ids)
+        self.assertEqual(panel.roster, [])
 
     async def test_invalid_handoff_fails_before_grouping(self):
         result = {"articles": [{"article_id": "missing", "desired_tone": "neutral"}], "agent_ids": []}

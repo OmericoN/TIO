@@ -1,5 +1,6 @@
 import unittest
 from datetime import datetime, timedelta, timezone
+from unittest.mock import patch
 
 from fastapi import HTTPException, Request
 from pydantic import ValidationError
@@ -9,9 +10,9 @@ from main import app
 from recommender.config import EMBED_MODEL
 from recommender.focus import parse_focus, tsquery_terms, word_patterns
 from recommender.hosts import host_affinity, rank_hosts, score_hosts
-from recommender.recommend import (Article, NoProfileSignal, ensure_user_embedding, interest_facets,
+from recommender.recommend import (Article, Listener, NoProfileSignal, ensure_user_embedding, interest_facets,
                                    prefer_language,
-                                   profile_text, score, select_events, siblings)
+                                   profile_text, recommend, score, select_events, siblings)
 
 NOW = datetime(2026, 11, 18, tzinfo=timezone.utc)
 
@@ -92,6 +93,15 @@ class ListenerTest(unittest.TestCase):
 
 
 class SelectionTest(unittest.TestCase):
+    def test_related_coverage_cannot_displace_a_pinned_article(self) -> None:
+        first = article("first")
+        second = article("second", embedding=(0, 1))
+        sibling = article("other-outlet", publication="pub2")
+        with (patch("recommender.recommend.fetch_articles", return_value=[first, second, sibling]),
+              patch("recommender.recommend.fetch_articles_by_id", return_value=[first, second])):
+            result = recommend(FakeConn(), Listener([1, 0], ["en"]), pinned_article_ids=["first", "second"], limit=2)
+        self.assertEqual(result["article_ids"], ["first", "second"])
+
     def test_score_rewards_interest_coverage_and_recency(self) -> None:
         close, old, base, covered = (article("close", sim_listener=0.6), article("old", sim_listener=0.6, hours_old=120),
                                      article("base"), article("cov", coverage=1.0))

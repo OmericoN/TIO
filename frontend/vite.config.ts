@@ -7,6 +7,7 @@ export default defineConfig({
   server: {
     proxy: {
       '/api': 'http://127.0.0.1:8000',
+      '/recommender-lab': 'http://127.0.0.1:8000',
     },
   },
 })

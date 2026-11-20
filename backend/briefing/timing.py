@@ -7,6 +7,8 @@ A podcast adds 30 s of intro and outro and 5 s per transition; a two-host debate
 
 from dataclasses import dataclass, field
 
+from pydantic import BaseModel, Field
+
 DEFAULT_WPM = 144          # mean pace_wpm of the personas
 BASE_S, PER_SOURCE_S = 60, 25
 MIN_S, MAX_S = 30, 240
@@ -23,6 +25,11 @@ class Story:
     outlets: set[str] = field(default_factory=set)
     words: int = 0
     selected: bool = False
+
+
+class PlannedStory(BaseModel):
+    article_ids: list[str] = Field(min_length=1, max_length=340)
+    estimated_seconds: int = Field(gt=0, le=300)
 
 
 def story_seconds(story: Story, wpm: float = DEFAULT_WPM, mode: str = "presenter") -> float:
@@ -53,4 +60,6 @@ def fit(stories: list[Story], minutes: float, wpm: float = DEFAULT_WPM,
             total += cost
         else:
             dropped.append(story)
+    if not kept and dropped:
+        kept.append(dropped.pop(0))
     return kept, dropped
