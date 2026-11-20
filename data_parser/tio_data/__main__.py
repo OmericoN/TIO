@@ -3,6 +3,7 @@
     uv run python -m tio_data load [--dry-run]          # JSONL files -> Supabase
     uv run python -m tio_data embed check               # does the OpenAI key work with the embedding model?
     uv run python -m tio_data embed articles [--force]  # article embeddings
+    uv run python -m tio_data embed personas [--force]  # host persona embeddings
     uv run python -m tio_data embed users               # user interest embeddings
     uv run python -m tio_data summarize check           # is the local summary model up?
     uv run python -m tio_data summarize articles [--force] [--limit N] [--language de] [--workers 6]
@@ -34,6 +35,8 @@ def main() -> None:
     p_articles.add_argument("--force", action="store_true", help="re-embed every article")
     p_articles.add_argument("--batch-size", type=int, default=128)
     p_articles.add_argument("--limit", type=int, help="only embed this many, newest first")
+    p_personas = targets.add_parser("personas", help="embed host personas (topics and audience)")
+    p_personas.add_argument("--force", action="store_true", help="re-embed every persona")
     targets.add_parser("users", help="rebuild user interest embeddings")
 
     for name, help_text, verb in [
@@ -41,7 +44,7 @@ def main() -> None:
         ("extract", "extract subject, event, topics, people and entities with the local Ollama LLM", "extract"),
     ]:
         llm_targets = commands.add_parser(name, help=help_text).add_subparsers(dest="target", required=True)
-        llm_targets.add_parser("check", help="test the OpenAI key and embedding model")
+        llm_targets.add_parser("check", help="test the Ollama connection and model")
         p_llm = llm_targets.add_parser("articles", help=f"{verb} articles that have not been done yet")
         p_llm.add_argument("--force", action="store_true", help=f"{verb} every article again")
         p_llm.add_argument("--limit", type=int, help="only this many, newest first")
@@ -82,6 +85,8 @@ def main() -> None:
             embed_jobs.check(embedder)
         elif args.target == "articles":
             embed_jobs.embed_articles(embedder, args.batch_size, args.force, args.limit)
+        elif args.target == "personas":
+            embed_jobs.embed_personas(embedder, args.force)
         else:
             embed_jobs.embed_users(embedder)
     except RuntimeError as err:
