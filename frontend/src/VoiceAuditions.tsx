@@ -115,7 +115,7 @@ export function VoiceAuditions({ selectedIds, onToggle }: Props) {
 
   return (
     <section className="voice-auditions" aria-labelledby="voice-auditions-title">
-      <h3 id="voice-auditions-title">Pick your favorite voices</h3>
+      <h3 id="voice-auditions-title">Pick up to three favorite voices</h3>
       <label className="mt-3 block">
         Search voices
         <input

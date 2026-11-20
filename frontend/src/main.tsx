@@ -283,6 +283,13 @@ function App() {
         setError('Sign-in failed. Try again.')
         return
       }
+      // Build the listener's interest embedding now, so the first recommendations don't wait for it.
+      // The feed still works without it: the recommender embeds a missing profile on demand.
+      await fetch('/api/profile/embed', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${session.access_token}` },
+        signal: AbortSignal.timeout(15000),
+      }).catch(() => null)
       setAccount({ owner: 'account-' + (session.user?.id || email.toLowerCase()),
         listenerId: demoAvailable ? session.user?.id : undefined })
     } catch {
@@ -318,9 +325,16 @@ function App() {
             {creatingAccount && step === 2 && (
               <VoiceAuditions
                 selectedIds={preferredPersonaIds}
-                onToggle={id => setPreferredPersonaIds(ids => (
-                  ids.includes(id) ? ids.filter(selectedId => selectedId !== id) : [...ids, id]
-                ))}
+                onToggle={id => {
+                  if (!preferredPersonaIds.includes(id) && preferredPersonaIds.length >= 3) {
+                    setError('You can pick up to three voices. Remove one before adding another.')
+                    return
+                  }
+                  setError('')
+                  setPreferredPersonaIds(ids => (
+                    ids.includes(id) ? ids.filter(selectedId => selectedId !== id) : [...ids, id]
+                  ))
+                }}
               />
             )}
             <fieldset hidden={creatingAccount && step !== 3} className="space-y-4">
