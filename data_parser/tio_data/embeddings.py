@@ -1,57 +1,72 @@
-"""Ollama client for nomic-embed-text-v2-moe (768 dimensions), plus small vector helpers.
+"""OpenAI embedding client (text-embedding-3-large at 1536 dimensions), plus small vector helpers.
 
-nomic models expect a task prefix, so always use the matching method:
-- embed_documents(): articles   -> "search_document: <text>"
-- embed_queries():   user interests and searches -> "search_query: <text>"
+Articles, users and live queries all go through the same model, so every vector in the database is comparable.
+OpenAI embeddings need no task prefix, so embed_documents() and embed_queries() send the text as is; both exist so
+callers say what they embed.
 """
 
 import json
 import math
+import time
 import urllib.error
 import urllib.request
 
-from tio_data.config import EMBED_DIM, EMBED_MODEL, OLLAMA_URL
+from tio_data.config import EMBED_DIM, EMBED_MODEL, OPENAI_API_KEY
 
-DOC_PREFIX = "search_document: "
-QUERY_PREFIX = "search_query: "
+OPENAI_EMBEDDINGS_URL = "https://api.openai.com/v1/embeddings"
+MAX_BATCH = 256          # inputs per request; OpenAI allows 2,048 but smaller batches retry cheaply
+MAX_INPUT_CHARS = 24_000  # ~6k tokens, under the model's 8,191-token input limit
+RETRIES = 5
 
 
-class OllamaEmbedder:
-    def __init__(self, base_url: str = OLLAMA_URL, model: str = EMBED_MODEL, dim: int = EMBED_DIM,
-                 timeout: float = 300):
-        self.base_url = base_url
+class OpenAIEmbedder:
+    def __init__(self, api_key: str = OPENAI_API_KEY, model: str = EMBED_MODEL, dim: int = EMBED_DIM,
+                 timeout: float = 120):
+        self.api_key = api_key
         self.model = model
         self.dim = dim
         self.timeout = timeout
+        self.base_url = OPENAI_EMBEDDINGS_URL
 
     def embed_documents(self, texts: list[str]) -> list[list[float]]:
-        return self._embed([DOC_PREFIX + t for t in texts])
+        return self._embed(texts)
 
     def embed_queries(self, texts: list[str]) -> list[list[float]]:
-        return self._embed([QUERY_PREFIX + t for t in texts])
+        return self._embed(texts)
 
     def _embed(self, texts: list[str]) -> list[list[float]]:
-        if not texts:
-            return []
-        body = json.dumps({"model": self.model, "input": texts, "truncate": True}).encode("utf-8")
-        request = urllib.request.Request(
-            f"{self.base_url}/api/embed", data=body, headers={"Content-Type": "application/json"}
-        )
-        try:
-            with urllib.request.urlopen(request, timeout=self.timeout) as response:
-                vectors = json.load(response).get("embeddings") or []
-        except urllib.error.HTTPError as err:
-            detail = err.read().decode("utf-8", "replace")
-            raise RuntimeError(
-                f"Ollama returned {err.code}: {detail}. Is the model pulled? Run: ollama pull {self.model}"
-            ) from err
-        except urllib.error.URLError as err:
-            raise RuntimeError(
-                f"Cannot reach Ollama at {self.base_url} ({err.reason}). Is `ollama serve` running?"
-            ) from err
+        vectors: list[list[float]] = []
+        for start in range(0, len(texts), MAX_BATCH):
+            vectors.extend(self._request([t[:MAX_INPUT_CHARS] or " " for t in texts[start:start + MAX_BATCH]]))
+        return vectors
 
+    def _request(self, texts: list[str]) -> list[list[float]]:
+        if not self.api_key.startswith("sk-"):
+            raise RuntimeError("OPENAI_API_KEY in .env is not an OpenAI API key (it should start with 'sk-'). "
+                               "Create one at https://platform.openai.com/api-keys.")
+        body = json.dumps({"model": self.model, "input": texts, "dimensions": self.dim}).encode("utf-8")
+        for attempt in range(RETRIES):
+            request = urllib.request.Request(self.base_url, data=body, headers={
+                "Content-Type": "application/json", "Authorization": f"Bearer {self.api_key}"})
+            try:
+                with urllib.request.urlopen(request, timeout=self.timeout) as response:
+                    data = sorted(json.load(response)["data"], key=lambda d: d["index"])
+                break
+            except urllib.error.HTTPError as err:
+                detail = err.read().decode("utf-8", "replace")[:300]
+                if err.code in (429, 500, 502, 503, 504) and attempt < RETRIES - 1:
+                    time.sleep(2 ** attempt)
+                    continue
+                raise RuntimeError(f"OpenAI returned {err.code}: {detail}") from err
+            except urllib.error.URLError as err:
+                if attempt < RETRIES - 1:
+                    time.sleep(2 ** attempt)
+                    continue
+                raise RuntimeError(f"Cannot reach OpenAI ({err.reason}).") from err
+
+        vectors = [d["embedding"] for d in data]
         if len(vectors) != len(texts):
-            raise RuntimeError(f"Ollama returned {len(vectors)} embeddings for {len(texts)} texts")
+            raise RuntimeError(f"OpenAI returned {len(vectors)} embeddings for {len(texts)} texts")
         if any(len(v) != self.dim for v in vectors):
             raise RuntimeError(f"{self.model} did not return {self.dim} dimensions, which the database expects")
         return vectors

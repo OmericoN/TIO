@@ -9,3 +9,7 @@ dist/
 .env
 .env.*
 !.env.example
+
+# Local seed data (plaintext test passwords, Newstex headlines) and run logs
+data_parser/seed/
+*.log

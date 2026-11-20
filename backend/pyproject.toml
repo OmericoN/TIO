@@ -3,4 +3,9 @@ name = "tio"
 version = "0.1.0"
 description = "TIO API"
 requires-python = ">=3.12"
-dependencies = ["fastapi", "psycopg>=3.3.4", "python-dotenv>=1.2.2", "uvicorn"]
+dependencies = [
+    "fastapi",
+    "psycopg[binary]>=3.3.9",
+    "python-dotenv>=1.2.4",
+    "uvicorn",
+]

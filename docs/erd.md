@@ -2,7 +2,7 @@
 
 The schema behind the AI news podcast: users, agent personas, news articles, and the episodes that connect them. The SQL is in [supabase/migrations/20261120000000_init_schema.sql](../supabase/migrations/20261120000000_init_schema.sql); the reasoning and the full JSONL → column mapping are in [database-plan.md](database-plan.md).
 
-Only the columns the MVP needs are `NOT NULL`; everything else is nullable. In the diagram, `vector768` is a pgvector `vector(768)` made by `nomic-embed-text-v2-moe` (local, via Ollama), and `_arr` marks a Postgres array.
+Only the columns the MVP needs are `NOT NULL`; everything else is nullable. In the diagram, `vector1536` is a pgvector `vector(1536)` made by OpenAI `text-embedding-3-large`, and `_arr` marks a Postgres array.
 
 ```mermaid
 erDiagram
@@ -17,6 +17,7 @@ erDiagram
     PROFILES ||--o{ USER_ARTICLE_INTERACTIONS : "does"
     ARTICLES ||--o{ USER_ARTICLE_INTERACTIONS : "on"
     EPISODES |o--o{ USER_ARTICLE_INTERACTIONS : "during"
+    AGENT_PERSONAS }o--o{ USER_ARTICLE_INTERACTIONS : "heard in (persona_ids)"
     PUBLISHERS ||--o{ PUBLICATIONS : "owns"
     PUBLICATIONS ||--o{ ARTICLES : "publishes"
     PUBLISHERS |o--o{ ARTICLES : "via"
@@ -44,21 +45,21 @@ erDiagram
         lang_code preferred_language "NOT NULL, default en"
         lang_code_arr secondary_languages
         text occupation
-        experience_level investor_experience
         smallint risk_appetite "1 cautious to 5 speculative"
         text listener_goal
         smallint briefing_length_minutes "NOT NULL, default 10"
         time preferred_listen_time
         smallint_arr delivery_days "ISO weekdays"
         uuid default_persona_id FK
-        text_arr followed_tickers
         text_arr followed_publication_ids
-        text_arr muted_topics
         text interests_text
-        vector768 interest_embedding
+        vector1536 interest_embedding
         text interest_embedding_source "onboarding, behavior, hybrid"
         text interest_embedding_model
         timestamptz interest_embedded_at
+        text_arr past_article_ids "most recent first"
+        vector1536 past_articles_embedding "mean of past articles"
+        timestamptz past_articles_updated_at
         boolean onboarding_completed "NOT NULL"
         boolean marketing_opt_in
         timestamptz last_active_at
@@ -162,10 +163,19 @@ erDiagram
         timestamptz ingested_at
         text summary
         text summary_model
-        vector768 summary_embedding
+        vector1536 summary_embedding
         text embedding_source "excerpt or summary"
         text embedding_model
         timestamptz embedded_at
+        text main_subject
+        text event
+        text event_type
+        text_arr topics
+        text_arr people
+        text_arr entities
+        text extraction_model
+        timestamptz extracted_at
+        tsvector search_vector
     }
 
     NEWSTEX_CATEGORIES {
@@ -219,6 +229,7 @@ erDiagram
         uuid user_id FK
         text article_id FK
         uuid episode_id FK
+        uuid_arr persona_ids "hosts heard, checked by trigger"
         interaction_type type
         real value
         timestamptz created_at
@@ -231,7 +242,7 @@ erDiagram
 |---|---|
 | `profiles` | One row per signed-up user, created automatically from Supabase Auth. Personal data, briefing preferences, and the user's interest embedding. |
 | `user_topic_preferences` | How much a user likes each Newstex topic code (−1 to 1), set in onboarding or learned. |
-| `agent_personas` | The podcast hosts: personality markdown, tone, rules, voice and LLM settings. |
+| `agent_personas` | The podcast hosts: personality markdown, rules, voice and LLM settings. |
 | `publishers`, `publications` | The 6 outlets and their owning companies. |
 | `articles` | One row per JSONL line, one column per data point, plus our summary and embedding. |
 | `newstex_categories` | The ~205 topic codes. |
@@ -242,7 +253,7 @@ erDiagram
 
 ## Database functions
 - `match_articles(query_embedding, match_count, min_published_at)`: the articles closest to an embedding.
-- `recommend_articles(p_user_id, match_count, min_published_at)`: articles closest to a user's interest embedding, skipping muted topics and articles already played.
+- `recommend_articles(p_user_id, match_count, min_published_at)`: articles closest to a user's interest embedding, skipping articles already played.
 
 ## Audio
 MP3 files live in the private Storage bucket `episode-audio` at `{user_id}/{episode_id}.mp3`. `episodes.audio_path` stores that path (`-1` until audio exists). The app plays it through a one-hour signed URL.

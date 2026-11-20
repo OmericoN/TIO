@@ -1,1 +1,1 @@
-"""Editorial research and briefing selection."""
+"""Editorial research: briefing selection, host matching, retrieval and recommendation."""

@@ -3,7 +3,7 @@
 ## Context
 TIO is an AI podcast built from news. It sends each user a personalised audio briefing, voiced by an agent persona, and links every claim back to its source article. The repo has a FastAPI backend stub, a React frontend and untracked Newstex data in `data_parser/data_files/` (6 JSONL files, 1,740 articles). There is no database yet. This plan defines the Supabase schema with three core areas, as requested:
 1. **Users**: registered profiles with personal data and recommender preferences.
-2. **Agent personas**: id, personality markdown, tone and voice/LLM settings.
+2. **Agent personas**: id, personality markdown and voice/LLM settings.
 3. **News**: one column for every data point in the JSONL records.
 
 Two small connecting areas, **episodes** and **interactions**, tie the three together. Without them the recommender has no signal and the podcast has no record of what it cited.
@@ -19,7 +19,6 @@ Decisions confirmed with the user:
 
 ## Enums
 - `lang_code`: `en`, `de`, `nl`
-- `experience_level`: `none`, `beginner`, `intermediate`, `professional`
 - `episode_status`: `queued`, `scripting`, `synthesizing`, `ready`, `failed`
 - `interaction_type`: `impression`, `played`, `completed`, `skipped`, `liked`, `disliked`, `source_opened`, `shared`
 - `preference_source`: `explicit` (onboarding) and `implicit` (learned)
@@ -31,7 +30,7 @@ Decisions confirmed with the user:
 |---|---|
 | `profiles` | `id`, `email`, `preferred_language` (default `'en'`), `briefing_length_minutes` (default 10), `onboarding_completed` (default false), `created_at`, `updated_at` |
 | `user_topic_preferences` | `user_id`, `category_code`, `weight` (default 0), `source` (default `'explicit'`) |
-| `agent_personas` | `id`, `slug`, `name`, `personality_md`, `tone` |
+| `agent_personas` | `id`, `slug`, `name`, `personality_md` |
 | `publishers` | `id`, `name` |
 | `publications` | `id`, `publisher_id`, `name` |
 | `articles` | `id`, `publication_id`, `headline`, `excerpt`, `text_content`, `published_at`, `language`, `permalink`, `source_file`, `ingested_at` (all present on all 1,740 rows) |
@@ -50,20 +49,22 @@ So for example `date_of_birth`, `country`, `default_persona_id`, `interest_embed
 - `country text` (ISO-2), `city text`, `timezone text default 'Europe/Amsterdam'`
 - `preferred_language lang_code default 'en'`, `secondary_languages lang_code[]`
 - `occupation text null`
-- `investor_experience experience_level null`: how much the listener knows about investing. It sets how much jargon the persona uses (`none` → explain what a "rate hike" is; `professional` → skip the basics).
 - `risk_appetite smallint null check (risk_appetite between 1 and 5)`: 1 = very cautious (savings, bonds), 5 = speculative (crypto, small caps, FX). It steers story choice, for example putting crypto and trading-ideas stories higher for a 5.
 - `listener_goal text` (for example "FX trading", "general awareness")
 - Briefing preferences: `briefing_length_minutes smallint default 10`, `preferred_listen_time time`, `delivery_days smallint[]` (ISO weekdays), `default_persona_id uuid → agent_personas`
-- `followed_tickers text[]`, `followed_publication_ids text[]`, `muted_topics text[]`
+- `followed_publication_ids text[]`
 - `onboarding_completed bool`, `marketing_opt_in bool default false` (GDPR consent to receive promotional emails; separate from the briefing itself), `last_active_at`, `created_at`, `updated_at`
 
 User embedding (also on `profiles`, all nullable):
 - `interests_text text null`: the user's own description of what they want to hear, written in onboarding (for example "Dutch tech stocks, ECB decisions, no celebrity news").
-- `interest_embedding vector(768) null`: the user's taste vector. It uses the same model and size as `articles.summary_embedding`, so users and articles can be compared directly.
+- `interest_embedding vector(1536) null`: the user's taste vector. It uses the same model and size as `articles.summary_embedding`, so users and articles can be compared directly.
 - `interest_embedding_source text null check in ('onboarding','behavior','hybrid')`: `onboarding` = embedding of `interests_text`; `behavior` = weighted average of the embeddings of articles the user played, completed or liked (skips and dislikes count negatively); `hybrid` = a blend of the two. It starts as `onboarding` and moves to `hybrid` once there are interactions.
 - `interest_embedding_model text null`, `interest_embedded_at timestamptz null`.
+- `past_article_ids text[]`: articles the user played, completed, liked, shared or opened the source of, most recent first. Impressions, skips and dislikes are left out.
+- `past_articles_embedding vector(1536) null`: the mean of those articles' embeddings, a plain "what they have listened to" vector, separate from the onboarding-weighted `interest_embedding`. `past_articles_updated_at timestamptz null`.
+- Both are kept current by a trigger on `user_article_interactions` that calls `refresh_profile_past_articles(user_id)` (migration `20261120190000_profile_past_articles.sql`); `tio_data embed users` refreshes them too, after articles are re-embedded.
 - An HNSW index on `interest_embedding (vector_cosine_ops)` for "listeners like you".
-- An RPC `recommend_articles(p_user_id uuid, match_count int, min_published_at timestamptz default null)` ranks articles by cosine similarity to the user's `interest_embedding`. It excludes articles in `muted_topics` and ones the user has already played.
+- An RPC `recommend_articles(p_user_id uuid, match_count int, min_published_at timestamptz default null)` ranks articles by cosine similarity to the user's `interest_embedding`. It excludes articles the user has already played.
 
 **`user_topic_preferences`**: the recommender's interest vector.
 - `user_id → profiles`, `category_code → newstex_categories`, `weight real` (−1…1), `source preference_source`, `updated_at`. PK `(user_id, category_code)`.
@@ -124,14 +125,24 @@ Every data point in the JSONL files maps to a column. `publication` and `publish
 | `ingested_at timestamptz default now()` | extra |
 | `summary text null` | extra: our own LLM-written summary (filled in later) |
 | `summary_model text null` | extra: which LLM wrote the summary |
-| `summary_embedding vector(768) null` | extra: embedding (pgvector, local `nomic-embed-text-v2-moe` via Ollama) |
+| `summary_embedding vector(1536) null` | extra: embedding (pgvector, OpenAI `text-embedding-3-large`) |
 | `embedding_source text null check in ('excerpt','summary')` | extra: which text was embedded |
-| `embedding_model text null` | extra: for example `'nomic-embed-text-v2-moe'`, set when embedded |
+| `embedding_model text null` | extra: for example `'text-embedding-3-large'`, set when embedded |
 | `embedded_at timestamptz null` | extra: when it was embedded |
+| `main_subject text null` | extra (LLM): what the article is mainly about, 2–6 words, English |
+| `event text null` | extra (LLM): one English sentence on what happened |
+| `event_type text null` | extra (LLM): `earnings`, `ipo`, `central_bank`, `merger_acquisition`, … (list in `tio_data/extract.py`) |
+| `topics text[]` | extra (LLM): 2–5 lowercase English themes, e.g. `interest rates` |
+| `people text[]` | extra (LLM): full names of the people the article is about or quotes |
+| `entities text[]` | extra (LLM): main companies, institutions, places, products; tickers in brackets |
+| `extraction_model text null`, `extracted_at timestamptz null` | extra: which LLM extracted the fields, and when |
+| `search_vector tsvector` | extra: full-text index, kept up to date by a trigger |
 
-**Embeddings:** the migration starts with `create extension if not exists vector;`. For now the embedding is made from the publisher's `excerpt` (`embedding_source = 'excerpt'`). Once the LLM `summary` column is filled, the same column is re-embedded from it (`embedding_source = 'summary'`), so the schema doesn't change. An HNSW index `articles_summary_embedding_idx on articles using hnsw (summary_embedding vector_cosine_ops)` makes similarity search fast. An RPC function `match_articles(query_embedding vector(768), match_count int, min_published_at timestamptz default null)` returns `id, headline, permalink, published_at, similarity`, ordered by cosine similarity. It covers "articles like this one", clustering the same story across outlets, and matching a user's interests to articles. All embedding columns are nullable, so articles load first and get embedded afterwards.
+**Extraction and keyword search** (migration `20261120170000_article_extraction.sql`): `tio_data extract articles` fills the LLM columns above with a local Ollama model. `search_vector` combines headline, people and entities (weight A), subject, event and topics (B), excerpt (C) and body (D) with the `simple` config, so names and tickers match exactly in EN, DE and NL. RPC `search_articles(query text, match_count int, min_published_at timestamptz)` takes web-search syntax (`"exact phrase"`, `OR`, `-exclude`) and returns matches ranked by `ts_rank`. GIN indexes on `topics`, `people`, `entities` and `search_vector`, and a b-tree on `event_type`.
 
-**Embedding model (local):** `nomic-embed-text-v2-moe` running in Ollama on the user's machine (`POST http://localhost:11434/api/embed`). It gives 768-dimension vectors and is multilingual, so EN, DE and NL versions of the same Invezz story land close together. It expects task prefixes: article text is embedded as `"search_document: " + text`, and user interests and queries as `"search_query: " + text`. Users and articles use the same model and size, so they can be compared directly. Embeddings are computed locally (by the loader/backend) and written to Supabase; Supabase only stores and searches them.
+**Embeddings:** the migration starts with `create extension if not exists vector;`. The embedded text is the headline plus the extracted subject, event, topics, people and entities (when present), then the `summary` if there is one (`embedding_source = 'summary'`) or else the publisher's `excerpt` (`embedding_source = 'excerpt'`). `tio_data embed articles` re-embeds an article when its model changes, a summary appears or it is extracted again. An HNSW index `articles_summary_embedding_idx on articles using hnsw (summary_embedding vector_cosine_ops)` makes similarity search fast. An RPC function `match_articles(query_embedding vector(1536), match_count int, min_published_at timestamptz default null)` returns `id, headline, permalink, published_at, similarity`, ordered by cosine similarity. It covers "articles like this one", clustering the same story across outlets, and matching a user's interests to articles. All embedding columns are nullable, so articles load first and get embedded afterwards.
+
+**Embedding model:** OpenAI `text-embedding-3-large`, shortened to 1536 dimensions with the API's `dimensions` parameter (under pgvector's 2,000-dimension HNSW limit). It is multilingual, so EN, DE and NL versions of the same Invezz story land close together, and it needs no task prefixes. Articles (`tio_data embed articles`), users (`tio_data embed users` and the recommender) and live wildcard queries all use this one model, so every vector can be compared with every other; the recommender ignores rows whose `embedding_model` differs. Migration `20261120210000_openai_embeddings.sql` moved the columns from `vector(768)` (local `nomic-embed-text-v2-moe`) and cleared the old vectors. Cost: $0.13 per 1M tokens, about $0.04 for the 1,740 articles and $0.40 at 10× volume. Embeddings are computed by the pipeline and backend and written to Supabase; Supabase only stores and searches them.
 
 **`newstex_categories`**: `code text PK`, `label text null` (filled in by hand later), `is_sentiment bool`. Holds the 205 codes.
 
@@ -147,7 +158,7 @@ Indexes: `articles(published_at desc)`, `(publication_id, published_at)`, `(lang
 - `id`, `episode_id → episodes`, `article_id → articles`, `position smallint`, `claim_text text` (our paraphrase, not article text), `audio_start_sec real`, `audio_end_sec real`
 
 **`user_article_interactions`**: implicit feedback for the recommender.
-- `id bigint identity`, `user_id → profiles`, `article_id → articles`, `episode_id null → episodes`, `type interaction_type`, `value real null` (for example the fraction listened), `created_at`
+- `id bigint identity`, `user_id → profiles`, `article_id → articles`, `episode_id null → episodes`, `persona_ids uuid[] not null default '{}'` (hosts the user heard: one for a solo briefing, two for a debate; a trigger rejects ids missing from `agent_personas`, migration `20261120220000_interaction_personas.sql`), `type interaction_type`, `value real null` (for example the fraction listened), `created_at`
 
 ## ERD (goes in docs/erd.md)
 ```
