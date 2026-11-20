@@ -1,12 +1,10 @@
 import json
 from pathlib import Path
-from typing import Literal
 from uuid import UUID
 
 from pydantic import BaseModel, Field, JsonValue
 
 PERSONAS_DIR = Path(__file__).resolve().parents[1] / "editorial" / "personas"
-PersonaTone = Literal["formal", "conversational", "energetic", "calm", "witty", "analytical", "authoritative"]
 
 
 class AgentPersona(BaseModel):
@@ -14,11 +12,9 @@ class AgentPersona(BaseModel):
     slug: str = Field(min_length=1)
     name: str = Field(min_length=1)
     personality_md: str = Field(min_length=1)
-    tone: PersonaTone
     tagline: str | None = None
     description: str | None = None
     system_prompt: str | None = None
-    secondary_tones: list[PersonaTone] | None = None
     target_audience: str | None = None
     expertise_topics: list[str] | None = None
     formality: int | None = Field(default=None, ge=1, le=5)

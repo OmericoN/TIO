@@ -8,7 +8,7 @@ See the [README](../README.md#run-locally) to start the servers.
 - [`backend/api/`](../backend/api/) holds endpoint definitions. Add new endpoints to the matching feature router and register new routers in `main.py`.
 - [`backend/voice/`](../backend/voice/) holds the ElevenLabs client. The preview route uses it to request an ElevenAgents session.
 - [`backend/editorial/`](../backend/editorial/framework.md) holds the written editorial framework, host persona Markdown, and listener profiles. These files are authoring references.
-- [`backend/research/`](../backend/research/) holds article-to-host matching and its database and OpenAI clients.
+- [`backend/research/`](../backend/research/) holds article-to-host matching, its database and OpenAI clients, and the recommender, which embeds a listener with OpenAI `text-embedding-3-large` (the same model as the articles) when they have no current embedding, then ranks articles by similarity, recency and diversity.
 - [`backend/tests/`](../backend/tests/) holds backend tests.
 
 | Endpoint | Route file |
@@ -16,6 +16,7 @@ See the [README](../README.md#run-locally) to start the servers.
 | `GET /api/health` | [`backend/api/health.py`](../backend/api/health.py) |
 | `POST /api/voice/session` | [`backend/api/voice.py`](../backend/api/voice.py) |
 | `POST /api/discussion/next-speaker` | [`backend/api/discussion.py`](../backend/api/discussion.py) |
+| `POST /api/recommend` | [`backend/api/recommend.py`](../backend/api/recommend.py) |
 
 ## Checks
 

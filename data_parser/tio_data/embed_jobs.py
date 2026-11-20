@@ -1,13 +1,14 @@
-"""Embedding jobs: read from Supabase, embed with Ollama, write the vectors back.
+"""Embedding jobs: read from Supabase, embed with OpenAI, write the vectors back.
 
-Articles: "headline + excerpt", or "headline + summary" once an LLM summary exists.
+Articles: headline + the extracted subject, event, topics, people and entities (when present) + summary, or the
+excerpt when there is no summary.
 Users: onboarding vector (interests_text), behavior vector (articles they interacted with), or a hybrid.
 """
 
 import time
 
 from tio_data.db import connect
-from tio_data.embeddings import OllamaEmbedder, from_pgvector, normalize, to_pgvector, weighted_average
+from tio_data.embeddings import OpenAIEmbedder, from_pgvector, normalize, to_pgvector, weighted_average
 
 # How much each interaction pulls a user's taste vector toward (or away from) an article.
 INTERACTION_WEIGHTS = {
@@ -24,30 +25,44 @@ BEHAVIOR_SHARE = 0.5          # weight of behavior vs. onboarding in a hybrid
 BEHAVIOR_LOOKBACK_DAYS = 60
 
 
-def check(embedder: OllamaEmbedder) -> None:
+def check(embedder: OpenAIEmbedder) -> None:
     vector = embedder.embed_queries(["ECB interest rate decision"])[0]
-    print(f"Ollama OK at {embedder.base_url}: {embedder.model} returns {len(vector)} dimensions.")
+    print(f"OpenAI OK: {embedder.model} returns {len(vector)} dimensions.")
 
 
-def _article_text(headline: str, excerpt: str, summary: str | None) -> tuple[str, str]:
+ARTICLE_FIELDS = "id, headline, excerpt, summary, main_subject, event, topics, people, entities"
+
+
+def _article_text(headline, excerpt, summary, main_subject, event, topics, people, entities) -> tuple[str, str]:
+    lines = [headline]
+    if main_subject:
+        lines.append(f"Subject: {main_subject}")
+    if event:
+        lines.append(f"Event: {event}")
+    for label, values in (("Topics", topics), ("People", people), ("Entities", entities)):
+        if values:
+            lines.append(f"{label}: {', '.join(values)}")
     if summary and summary.strip():
-        return f"{headline}\n\n{summary.strip()}", "summary"
-    return f"{headline}\n\n{(excerpt or '').strip()}", "excerpt"
+        return "\n".join(lines) + f"\n\n{summary.strip()}", "summary"
+    return "\n".join(lines) + f"\n\n{(excerpt or '').strip()}", "excerpt"
 
 
-def embed_articles(embedder: OllamaEmbedder, batch_size: int = 32, force: bool = False,
+def embed_articles(embedder: OpenAIEmbedder, batch_size: int = 128, force: bool = False,
                    limit: int | None = None) -> None:
-    # Without --force: articles with no embedding, or whose summary appeared after they were embedded.
+    # Without --force: articles with no embedding, one from another model, or one made before a summary or the
+    # extracted fields arrived.
     where = "true" if force else (
         "summary_embedding is null "
-        "or (nullif(trim(summary), '') is not null and embedding_source is distinct from 'summary')"
+        "or embedding_model is distinct from %(model)s "
+        "or (nullif(trim(summary), '') is not null and embedding_source is distinct from 'summary') "
+        "or extracted_at > embedded_at"
     )
-    sql = f"select id, headline, excerpt, summary from public.articles where {where} order by published_at desc"
+    sql = f"select {ARTICLE_FIELDS} from public.articles where {where} order by published_at desc"
     if limit:
         sql += f" limit {int(limit)}"
 
     with connect() as conn:
-        rows = conn.execute(sql).fetchall()
+        rows = conn.execute(sql, {"model": embedder.model}).fetchall()
         if not rows:
             print("All articles already have an up-to-date embedding.")
             return
@@ -56,7 +71,7 @@ def embed_articles(embedder: OllamaEmbedder, batch_size: int = 32, force: bool =
         started, done = time.monotonic(), 0
         for start in range(0, len(rows), batch_size):
             batch = rows[start:start + batch_size]
-            texts, sources = zip(*(_article_text(h, e, s) for _, h, e, s in batch))
+            texts, sources = zip(*(_article_text(*row[1:]) for row in batch))
             vectors = embedder.embed_documents(list(texts))
             with conn.cursor() as cur:
                 cur.executemany(
@@ -87,8 +102,12 @@ def _behavior_vector(conn, user_id) -> list[float] | None:
     return weighted_average([v for v, _ in pairs], [w for _, w in pairs])
 
 
-def embed_users(embedder: OllamaEmbedder) -> None:
+def embed_users(embedder: OpenAIEmbedder) -> None:
     with connect() as conn:
+        # past_article_ids / past_articles_embedding follow interactions by trigger, but article embeddings
+        # change when articles are re-embedded, so recompute the averages here too.
+        conn.execute("select public.refresh_profile_past_articles(id) from public.profiles")
+        conn.commit()
         users = conn.execute("select id, interests_text from public.profiles order by created_at").fetchall()
         updated = skipped = 0
         for user_id, interests in users:

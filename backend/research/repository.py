@@ -15,7 +15,7 @@ class PersonaMatchRepository:
 
     def get_personas_by_ids(self, ids: list[str]) -> dict[str, dict]:
         return self._fetch(
-            """SELECT id::text, personality_md, tone, secondary_tones::text[],
+            """SELECT id::text, personality_md,
                       humor_level, do_rules, dont_rules, expertise_topics
                FROM public.agent_personas WHERE id = ANY(%s::uuid[])""",
             ids,

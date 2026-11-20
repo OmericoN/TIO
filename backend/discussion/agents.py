@@ -5,6 +5,8 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field
 
+from research.matcher import ArticleTone
+
 from .personas import PERSONAS_DIR, AgentPersona
 from .speakers import plan_speaker
 
@@ -25,6 +27,7 @@ class TurnContext(BaseModel):
     listener_preferences: str = ""
     question: str | None = None
     recent_turns: list[DiscussionLine] = Field(default_factory=list)
+    article_tones: list[ArticleTone] = Field(default_factory=list)
     source_excerpts: list[SourceExcerpt] = Field(default_factory=list)
 
 
@@ -55,7 +58,7 @@ def prepare_agent_turn(
 
     style = persona.model_dump_json(
         include={
-            "tone", "secondary_tones", "target_audience", "expertise_topics", "formality", "humor_level",
+            "target_audience", "expertise_topics", "formality", "humor_level",
             "pace_wpm", "catchphrases", "do_rules", "dont_rules", "intro_template", "outro_template",
         },
         exclude_none=True,

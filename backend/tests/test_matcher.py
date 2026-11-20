@@ -19,8 +19,8 @@ def article(id, language, headline, body):
                 text_content=body, categories=["BUSINESS"])
 
 
-def persona(id, personality, tone="calm", secondary=None):
-    return dict(id=id, personality_md=personality, tone=tone, secondary_tones=secondary,
+def persona(id, personality):
+    return dict(id=id, personality_md=personality,
                 humor_level=None, do_rules=[], dont_rules=[], expertise_topics=["BUSINESS"])
 
 
@@ -33,8 +33,8 @@ class MatcherTest(unittest.TestCase):
         }
         self.personas = {
             CALM: persona(CALM, "Patient and factual."),
-            WITTY: persona(WITTY, "Enjoys wordplay.", secondary=["witty"]),
-            CHEERFUL: persona(CHEERFUL, "Always makes a joke.", tone="conversational"),
+            WITTY: persona(WITTY, "Enjoys wordplay."),
+            CHEERFUL: persona(CHEERFUL, "Always makes a joke."),
             EXPERT: persona(EXPERT, "A measured industry analyst."),
         }
         self.repo = Mock(spec=PersonaMatchRepository)
@@ -69,22 +69,20 @@ class MatcherTest(unittest.TestCase):
                 {"article_id": a, "desired_tone": tone}
                 for a, tone in zip(articles, ["analytical", "somber", "neutral", "analytical"])
             ],
-            "agent_ids": [EXPERT, CALM],
+            "agent_ids": [WITTY, EXPERT, CALM],
         })
         self.repo.get_articles_by_ids.assert_called_once_with(["en", "de", "nl"])
         self.repo.get_personas_by_ids.assert_called_once_with([WITTY, CHEERFUL, EXPERT, CALM])
         classify, rank = self.client.generate.call_args_list
         self.assertEqual(classify.args[2]["articles"][1]["text_content"], self.articles["de"]["text_content"])
-        self.assertEqual([p["id"] for p in rank.args[2]["personas"]], [CHEERFUL, EXPERT, CALM])
+        self.assertEqual([p["id"] for p in rank.args[2]["personas"]], [WITTY, CHEERFUL, EXPERT, CALM])
         self.assertEqual(rank.args[2]["articles"][1]["desired_tone"], "somber")
         self.client.generate.reset_mock()
         self.assertEqual(self.matcher.match_personas(["de", "en"], [CALM], 1)["agent_ids"], [CALM])
         self.assertEqual([c.args[0] for c in self.client.generate.call_args_list], ["ranking"])
 
     def test_no_suitable_host_preserves_article_tones(self):
-        self.personas[WITTY]["tone"] = "witty"
-        self.personas[WITTY]["secondary_tones"] = None
-        for hosts in ([WITTY], [CHEERFUL], []):
+        for hosts in ([CHEERFUL], []):
             self.assertEqual(self.matcher.match_personas(["de"], hosts, 1), {
                 "articles": [{"article_id": "de", "desired_tone": "somber"}], "agent_ids": []
             })
@@ -118,9 +116,9 @@ class MatcherTest(unittest.TestCase):
         self.client.generate.side_effect = self.generate
         self.assertEqual(self.matcher.match_personas(["en"], [], 1)["articles"][0]["desired_tone"], "analytical")
 
-    def test_outside_or_excluded_candidate_is_a_processing_error(self):
+    def test_outside_candidate_is_a_processing_error(self):
         self.matcher.match_personas(["de"], [], 1)
-        for id in [WITTY, EXPERT]:
+        for id in [CHEERFUL, EXPERT]:
             self.client.generate.side_effect = None
             self.client.generate.return_value = Ratings(personas=[dict(id=id, delivery_fit=3, expertise=2)])
             with self.assertRaises(MatchProcessingError):
@@ -194,6 +192,8 @@ class AdapterTest(unittest.TestCase):
             self.assertIn("ANY(%s", sql)
             self.assertEqual(params, (ids,))
             self.assertNotIn(ids[0], sql)
+        persona_query = database.execute.call_args.args[0]
+        self.assertNotIn("tone", persona_query.lower())
         self.assertEqual(database.execute.call_count, 2)
 
 
