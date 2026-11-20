@@ -1,6 +1,7 @@
 import unittest
 
-from main import app, health
+from api.health import health
+from main import app
 
 
 class HealthTest(unittest.TestCase):

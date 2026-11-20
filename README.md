@@ -59,4 +59,27 @@ bun run dev
 
 Vite prints the frontend URL, typically `http://localhost:5173`. It forwards `/api` requests to the backend at `http://127.0.0.1:8000`. Try `/api/health` on either server for a health check, or open `http://127.0.0.1:8000/docs` for the interactive API docs.
 
-Run `uv run --locked python -m unittest` in `backend/` to check the health endpoint and `bun run build` in `frontend/` to type-check and build the frontend.
+Run `uv run --locked python -m unittest` in `backend/` for backend tests and `bun run build` in `frontend/` to type-check and build the frontend.
+
+### Backend layout
+
+- [`backend/main.py`](backend/main.py) creates the FastAPI app and mounts the routers under `/api`.
+- [`backend/api/`](backend/api/) holds endpoint definitions. Add new endpoints to the matching feature router and register new routers in `main.py`.
+- [`backend/voice/`](backend/voice/) holds the ElevenLabs client. Add ElevenLabs synthesis calls to the client when implementing verified audio rendering.
+- [`backend/editorial/`](backend/editorial/framework.md) holds the written editorial framework, host persona Markdown, and listener profiles. These files are authoring references.
+- [`backend/tests/`](backend/tests/) holds backend tests. Add retrieval, script generation, and verification code in a `backend/research/` package when implementing that pipeline.
+
+| Endpoint | Route file |
+| --- | --- |
+| `GET /api/health` | [`backend/api/health.py`](backend/api/health.py) |
+| `POST /api/voice/session` | [`backend/api/voice.py`](backend/api/voice.py) |
+
+### Live voice
+
+Configure and publish a private ElevenLabs agent. Select **Realtime** with **Eleven Realtime v1 Mini** in the agent dashboard if your workspace has access. Give the agent responsibility for clarifying listener questions and reporting progress while the research pipeline prepares verified answers.
+
+Set `ELEVENLABS_API_KEY` and `ELEVENLABS_AGENT_ID` in the backend process environment, then start FastAPI as above. The key stays on the server.
+
+Call `POST /api/voice/session` from the local Vite app without a request body. It returns `token` and `conversation_id`. Pass the token as `conversationToken` to the ElevenLabs React SDK's `startSession` with `connectionType: 'webrtc'`. The browser exchanges microphone and speaker audio directly with ElevenLabs.
+
+Keep the development servers bound to localhost. Add application authentication and a session rate limit before exposing token issuance through a public server or proxy.
