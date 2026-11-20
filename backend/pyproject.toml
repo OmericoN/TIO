@@ -5,6 +5,7 @@ description = "TIO API"
 requires-python = ">=3.12"
 dependencies = [
     "fastapi",
+    "numpy>=2.5.5",
     "psycopg[binary]>=3.3.9",
     "python-dotenv>=1.2.4",
     "uvicorn",

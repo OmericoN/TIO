@@ -5,6 +5,8 @@
     uv run python -m tio_data embed articles [--force]  # article embeddings
     uv run python -m tio_data embed personas [--force]  # host persona embeddings
     uv run python -m tio_data embed users               # user interest embeddings
+    uv run python -m tio_data listener add --email ... --name ... --interests ... --personas a,b,c   # new listener
+    uv run python -m tio_data listener remove --email ...
     uv run python -m tio_data summarize check           # is the local summary model up?
     uv run python -m tio_data summarize articles [--force] [--limit N] [--language de] [--workers 6]
     uv run python -m tio_data extract check             # is the local extraction model up?
@@ -52,11 +54,36 @@ def main() -> None:
         p_llm.add_argument("--model", help="Ollama model (default: SUMMARY_MODEL or qwen2.5:14b)")
         p_llm.add_argument("--workers", type=int, default=4, help="requests sent to Ollama at once")
 
+    p_listener = commands.add_parser("listener", help="add or remove one listener account")
+    listener_cmds = p_listener.add_subparsers(dest="target", required=True)
+    p_add = listener_cmds.add_parser("add", help="create the account, fill the profile, print the user_id")
+    p_add.add_argument("--email", required=True)
+    p_add.add_argument("--name", required=True)
+    p_add.add_argument("--interests", required=True, help="what they want to hear about, in their words")
+    p_add.add_argument("--personas", required=True, help="the 3 personas picked at sign-up, as slugs, comma-separated")
+    p_add.add_argument("--goal")
+    p_add.add_argument("--occupation")
+    p_add.add_argument("--languages", default="en", help="first one is preferred, e.g. nl,en")
+    p_add.add_argument("--minutes", type=int, default=10)
+    p_add.add_argument("--risk", type=int, choices=range(1, 6))
+    p_add.add_argument("--country", help="ISO-2, e.g. NL")
+    p_remove = listener_cmds.add_parser("remove", help="delete the account and its profile")
+    p_remove.add_argument("--email", required=True)
+
     args = parser.parse_args()
 
     if args.command == "load":
         from tio_data.loader import load
         load(args.data_dir, args.dry_run)
+        return
+
+    if args.command == "listener":
+        from tio_data import listeners
+        if args.target == "add":
+            print(listeners.add(args.email, args.name, args.interests, args.personas.split(","), args.goal,
+                                args.occupation, args.languages.split(","), args.minutes, args.risk, args.country))
+        else:
+            print("removed" if listeners.remove(args.email) else "no such account")
         return
 
     if args.command in ("summarize", "extract"):

@@ -1,0 +1,224 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Recommender Lab</title>
+<style>
+:root {
+  --bg: #f6f7f9; --surface: #fff; --fg: #16202c; --muted: #586678; --line: #d9dee6;
+  --accent: #1f5fbf; --accent-soft: #e4ecfa; --signal: #b4570b; --signal-soft: #fbeedd; --code: #eef1f5;
+  --body: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root { --bg: #0f141b; --surface: #161d27; --fg: #e3e8ef; --muted: #98a5b6; --line: #2a3442;
+          --accent: #7aa7ee; --accent-soft: #1c2a40; --signal: #f0a35c; --signal-soft: #33261a; --code: #1b2330;
+          color-scheme: dark; }
+}
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+.stack { display: flex; flex-direction: column; gap: 12px; }
+body { margin: 0; background: var(--bg); color: var(--fg); font: 15px/1.5 var(--body); padding: 24px 16px 48px; }
+main { max-width: 1180px; margin: 0 auto; display: grid; grid-template-columns: 340px 1fr; gap: 24px; align-items: start; }
+h1 { font-size: 1.4rem; margin: 0 0 4px; } h2 { font-size: 1rem; margin: 0; }
+.muted { color: var(--muted); }
+form, .panel { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 16px; display: flex; flex-direction: column; gap: 12px; }
+label { display: flex; flex-direction: column; gap: 4px; font-size: .82rem; color: var(--muted); }
+input, select, textarea { font: inherit; color: var(--fg); background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 7px 9px; }
+textarea { resize: vertical; min-height: 60px; }
+.row { display: flex; gap: 10px; } .row > * { flex: 1; min-width: 0; }
+.tabs { display: flex; gap: 6px; }
+.tabs button { flex: 1; }
+button { font: inherit; border-radius: 6px; border: 1px solid var(--line); background: var(--bg); color: var(--fg); padding: 7px 12px; cursor: pointer; }
+button[aria-pressed="true"], button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip { font-family: var(--mono); font-size: .72rem; background: var(--accent-soft); color: var(--accent); border-radius: 999px; padding: 2px 8px; display: inline-flex; gap: 6px; align-items: center; }
+.chip.x { background: var(--signal-soft); color: var(--signal); }
+.chip button { all: unset; cursor: pointer; font-weight: 600; }
+.presets { display: flex; flex-wrap: wrap; gap: 6px; }
+.presets button { font-size: .78rem; padding: 3px 8px; }
+#results { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+.status { font-family: var(--mono); font-size: .8rem; }
+.hosts { display: flex; flex-wrap: wrap; gap: 8px; }
+.host { border: 1px solid var(--line); border-radius: 8px; padding: 6px 10px; background: var(--surface); font-size: .88rem; }
+.host b { display: block; }
+ol.articles { list-style: none; margin: 0; padding: 0; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); }
+ol.articles li { display: grid; grid-template-columns: 2.2rem 1fr auto; gap: 10px; padding: 10px 12px; border-top: 1px solid var(--line); align-items: start; }
+ol.articles li:first-child { border-top: 0; }
+ol.articles li.pinned { background: var(--accent-soft); }
+.n { font-family: var(--mono); color: var(--muted); text-align: right; font-size: .8rem; padding-top: 2px; }
+.meta { font-size: .78rem; color: var(--muted); font-family: var(--mono); }
+.acts { display: flex; gap: 6px; } .acts button { font-size: .75rem; padding: 3px 8px; }
+pre { background: var(--code); border: 1px solid var(--line); border-radius: 8px; padding: 12px; overflow-x: auto; font: .78rem/1.5 var(--mono); margin: 0; }
+details summary { cursor: pointer; color: var(--muted); font-size: .85rem; }
+@media (max-width: 860px) { main { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<main>
+  <div style="display:flex;flex-direction:column;gap:16px">
+    <div><h1>Recommender Lab</h1><p class="muted" style="margin:0">1. <code>POST /api/recommend</code>: the listener's top 50. 2. Select must-haves, set a length, press Generate: <code>POST /api/briefing/generate</code> fits the list and runs the tone matcher.</p></div>
+    <form id="form">
+      <label id="user-box">Listener<select id="user"></select><span id="user-info" class="muted"></span></label>
+      <label>Focus (optional)<input id="focus" placeholder="e.g. Elon Musk and Tesla, no crypto, last 2 days"></label>
+      <div class="presets" id="presets"></div>
+      <div class="row">
+        <label>Articles<input id="limit" type="number" min="1" max="200" placeholder="50"></label>
+        <label>Days<input id="days" type="number" min="1" max="365" placeholder="any"></label>
+      </div>
+      <div><span class="muted" style="font-size:.82rem">Selected (must-haves, always kept)</span><div class="chips" id="pins"><span class="muted" style="font-size:.8rem">Pin articles from the results.</span></div></div>
+      <div><span class="muted" style="font-size:.82rem">Dismissed</span><div class="chips" id="dismissed"><span class="muted" style="font-size:.8rem">None.</span></div></div>
+      <button class="primary" type="submit" id="run">Recommend</button>
+    </form>
+    <form id="gen-form" class="panel">
+      <h2>Generate</h2>
+      <div class="row">
+        <label>Length (minutes)<input id="gen-minutes" type="number" min="1" max="120" value="10"></label>
+        <label>Mode<select id="gen-mode"><option value="presenter">Presenter</option><option value="debate">Debate</option></select></label>
+      </div>
+      <button class="primary" type="submit" id="gen-run" disabled>Generate (run Recommend first)</button>
+      <p class="muted" style="margin:0;font-size:.8rem">Runs the tone matcher: 20 s to a few minutes depending on length.</p>
+    </form>
+  </div>
+  <section id="results"><div class="panel"><p class="muted" style="margin:0">Pick a listener and press Recommend.</p></div></section>
+</main>
+<script>
+const $ = (id) => document.getElementById(id);
+const state = { pins: [], dismissed: [], info: {}, list: [], focus: null, catalog: { users: [], personas: [] } };
+const PRESETS = ["Jensen Huang", "oil and gold, last 2 days", "markets but no crypto or bitcoin", "Elon Musk and Tesla", "central banks and inflation this week", "AI stocks without Nvidia"];
+
+function el(tag, attrs = {}, ...kids) {
+  const node = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs)) k === "text" ? node.textContent = v : node.setAttribute(k, v);
+  for (const kid of kids) node.append(kid);
+  return node;
+}
+
+for (const p of PRESETS) {
+  const b = el("button", { type: "button", text: p });
+  b.onclick = () => { $("focus").value = p; };
+  $("presets").append(b);
+}
+
+function renderChips(id, list, cls) {
+  const box = $(id); box.textContent = "";
+  if (!list.length) { box.append(el("span", { class: "muted", style: "font-size:.8rem", text: id === "pins" ? "Pin articles from the results." : "None." })); return; }
+  for (const aid of list) {
+    const label = state.info[aid]?.headline?.slice(0, 40) || aid.slice(0, 18);
+    const x = el("button", { type: "button", "aria-label": "Remove", text: "×" });
+    x.onclick = () => { list.splice(list.indexOf(aid), 1); renderChips(id, list, cls); };
+    box.append(el("span", { class: "chip " + cls }, label, x));
+  }
+}
+
+async function api(path, body) {
+  const res = await fetch(path, body ? { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) } : {});
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(typeof data.detail === "string" ? data.detail : JSON.stringify(data.detail || data));
+  return data;
+}
+
+function request() {
+  const body = {};
+  if ($("days").value) body.days = +$("days").value;
+  body.user_id = $("user").value;
+  if ($("focus").value.trim()) body.focus = $("focus").value.trim();
+  if ($("limit").value) body.limit = +$("limit").value;
+  if (state.pins.length) body.pinned_article_ids = [...state.pins];
+  if (state.dismissed.length) body.excluded_article_ids = [...state.dismissed];
+  return body;
+}
+
+async function run(e) {
+  e?.preventDefault();
+  const out = $("results"); out.textContent = "";
+  const status = el("p", { class: "status muted", text: "Running…" }); out.append(status);
+  const body = request(); const t0 = performance.now();
+  try {
+    const rec = await api("/api/recommend", body);
+    const ms = Math.round(performance.now() - t0);
+    Object.assign(state.info, await api("/api/recommend/lookup", { article_ids: rec.article_ids }));
+    status.textContent = `${rec.article_ids.length} articles · ${rec.persona_ids.length} personas ranked · ${ms} ms`;
+    const personas = Object.fromEntries(state.catalog.personas.map(p => [p.id, p]));
+    const hosts = el("div", { class: "hosts" });
+    rec.persona_ids.forEach((id, i) => {
+      const p = personas[id] || { name: id, slug: "" };
+      hosts.append(el("div", { class: "host" }, el("b", { text: `${i + 1}. ${p.name}` }), el("span", { class: "muted", text: p.slug })));
+    });
+    out.append(el("h2", { text: "Personas, best fit first" }), hosts, el("h2", { text: "Articles, in the order returned" }));
+    const list = el("ol", { class: "articles" });
+    rec.article_ids.forEach((id, i) => {
+      const a = state.info[id] || { headline: id };
+      const li = el("li", state.pins.includes(id) ? { class: "pinned" } : {});
+      const link = el("a", { href: a.permalink || "#", target: "_blank", rel: "noopener", text: a.headline });
+      const meta = el("div", { class: "meta", text: [a.publication, a.language, (a.published_at || "").slice(0, 16).replace("T", " "), a.people?.length ? "people: " + a.people.slice(0, 3).join(", ") : ""].filter(Boolean).join(" · ") });
+      const pin = el("button", { type: "button", text: state.pins.includes(id) ? "Pinned" : "Pin" });
+      pin.onclick = () => { if (!state.pins.includes(id)) state.pins.push(id); renderChips("pins", state.pins, ""); pin.textContent = "Pinned"; };
+      const dis = el("button", { type: "button", text: "Dismiss" });
+      dis.onclick = () => { if (!state.dismissed.includes(id)) state.dismissed.push(id); renderChips("dismissed", state.dismissed, "x"); li.style.opacity = .4; };
+      li.append(el("span", { class: "n", text: i + 1 }), el("div", {}, link, meta), el("div", { class: "acts" }, pin, dis));
+      list.append(li);
+    });
+    out.append(list);
+    const raw = el("details", {}, el("summary", { text: "Request and raw response" }), el("pre", { text: "POST /api/recommend\n" + JSON.stringify(body, null, 2) + "\n\n" + JSON.stringify(rec, null, 2) }));
+    out.append(raw);
+    state.list = rec.article_ids; state.focus = body.focus || null;
+    $("gen-run").disabled = false; $("gen-run").textContent = "Generate";
+  } catch (err) {
+    status.textContent = "Error: " + err.message;
+  }
+}
+$("form").addEventListener("submit", run);
+
+async function generatePlan(e) {
+  e?.preventDefault();
+  const out = $("results"); out.textContent = "";
+  const status = el("p", { class: "status muted", text: "Generating: fitting the list and running the tone matcher…" }); out.append(status);
+  const body = { user_id: $("user").value, article_ids: state.list, selected_article_ids: [...state.pins],
+                 minutes: +$("gen-minutes").value || 10, mode: $("gen-mode").value };
+  if (state.focus) body.focus = state.focus;
+  const t0 = performance.now();
+  try {
+    const plan = await api("/api/briefing/generate", body);
+    Object.assign(state.info, await api("/api/recommend/lookup", { article_ids: plan.article_ids }));
+    const s = Math.round((performance.now() - t0) / 1000);
+    status.textContent = `${plan.estimated_minutes} of ${plan.requested_minutes} min · ${plan.segments.length} stories · ${plan.article_ids.length} articles · ${plan.added_article_ids.length} added, ${plan.dropped_article_ids.length} dropped · ${s} s` + (plan.matcher_error ? ` · matcher: ${plan.matcher_error}` : "");
+    const personas = Object.fromEntries(state.catalog.personas.map(p => [p.id, p]));
+    const hosts = el("div", { class: "hosts" });
+    plan.hosts.forEach(id => { const p = personas[id] || { name: id, slug: "" }; hosts.append(el("div", { class: "host" }, el("b", { text: p.name }), el("span", { class: "muted", text: p.slug }))); });
+    out.append(el("h2", { text: plan.hosts_from_matcher ? "Hosts (our order, accepted by the matcher)" : "Hosts (our order; matcher gave no choice)" }), hosts,
+               el("h2", { text: "Plan, story by story" }));
+    const list = el("ol", { class: "articles" });
+    plan.segments.forEach((seg, i) => {
+      const lines = seg.article_ids.map(id => {
+        const a = state.info[id] || { headline: id };
+        const tags = [plan.tones[id] ? "tone: " + plan.tones[id] : "", plan.added_article_ids.includes(id) ? "added" : "", state.pins.includes(id) ? "selected" : ""].filter(Boolean).join(" · ");
+        return el("div", {}, el("a", { href: a.permalink || "#", target: "_blank", rel: "noopener", text: a.headline }),
+                  el("div", { class: "meta", text: [a.publication, a.language, tags].filter(Boolean).join(" · ") }));
+      });
+      list.append(el("li", {}, el("span", { class: "n", text: i + 1 }), el("div", {}, ...lines), el("span", { class: "meta", text: seg.estimated_seconds + " s" })));
+    });
+    out.append(list, el("details", {}, el("summary", { text: "Request and raw response" }),
+      el("pre", { text: "POST /api/briefing/generate\n" + JSON.stringify(body, null, 2) + "\n\n" + JSON.stringify(plan, null, 2) })));
+  } catch (err) {
+    status.textContent = "Error: " + err.message;
+  }
+}
+$("gen-form").addEventListener("submit", generatePlan);
+
+$("user").onchange = () => {
+  const u = state.catalog.users.find(u => u.id === $("user").value);
+  $("user-info").textContent = u ? `${u.occupation || ""} · ${u.interests || ""} · ${u.minutes} min` : "";
+  if (u && u.minutes) $("gen-minutes").value = u.minutes;
+};
+
+api("/api/recommend/catalog").then(c => {
+  state.catalog = c;
+  for (const u of c.users) $("user").append(el("option", { value: u.id, text: u.name }));
+  $("user").onchange();
+}).catch(err => { $("results").textContent = "Could not load listeners: " + err.message; });
+</script>
+</body>
+</html>
