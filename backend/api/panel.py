@@ -20,7 +20,7 @@ from fastapi.responses import StreamingResponse
 from psycopg.rows import dict_row
 from pydantic import BaseModel, Field, ValidationError, model_validator
 
-from discussion.panel import Panel, Turn, model, passages, review_event, select_stories, source_set
+from discussion.panel import Panel, Turn, model, passages, review_event, select_stories, source_set, spoken_text
 from discussion.agents import DiscussionLine
 from discussion.matched import CompletedMatch, DiscussionPlan, InvalidMatch, matched_panel, planned_panel, test_shortlist
 from discussion.personas import AgentPersona, load_starter_personas
@@ -76,12 +76,22 @@ class Step(BaseModel):
 
 
 @dataclass
+class Prefetch:
+    after: UUID                 # the segment it assumes was fully heard
+    generation: int
+    state: tuple                # Panel.state() it was drafted for
+    task: asyncio.Task
+
+
+@dataclass
 class Session:
     panel: Panel
     generation: int = 0
     pending: tuple[UUID, Turn, list] | None = None
     busy: bool = False
     touched: float = 0
+    pending_seconds: float = 0  # length of the pending segment's audio
+    prefetch: Prefetch | None = None
 
 
 sessions: dict[UUID, Session] = {}
@@ -185,14 +195,36 @@ def eleven(path, body):
         return response.read()
 
 
+# Delivery per story tone: steadier for sensitive news, more animated for upbeat stories.
+VOICE_SETTINGS = {
+    "somber": {"stability": 0.8, "style": 0.0},
+    "serious": {"stability": 0.65, "style": 0.1},
+    "analytical": {"stability": 0.55, "style": 0.2},
+    "neutral": {"stability": 0.5, "style": 0.3},
+    "upbeat": {"stability": 0.35, "style": 0.55},
+}
+V3_STABILITY = {"somber": 1.0, "serious": 1.0, "upbeat": 0.0}  # eleven_v3 takes 0 (creative), 0.5 or 1 (robust)
+MP3_BYTES_PER_SECOND = 128_000 / 8  # ElevenLabs' default mp3_44100_128
+
+
+def speech_request(text, tone):
+    tts_model = os.getenv("PANEL_TTS_MODEL", "").strip()
+    if tts_model.startswith("eleven_v3"):
+        settings = {"stability": V3_STABILITY.get(tone, 0.5)}
+    else:
+        settings = {**VOICE_SETTINGS.get(tone, VOICE_SETTINGS["neutral"]), "similarity_boost": 0.75,
+                    "use_speaker_boost": True}
+    return {"text": text, "voice_settings": settings, **({"model_id": tts_model} if tts_model else {})}
+
+
 def render(panel, turn):
     persona = panel.personas[panel.speaker()]
     voice = persona.voice_id or os.getenv("PANEL_VOICE_" + persona.slug.upper().replace("-", "_"))
     if not voice:
         raise ValueError(f"Configure a voice for {persona.slug}.")
-    audio = eleven("text-to-speech/" + quote(voice, safe=""), {"text": turn.text})
+    audio = eleven("text-to-speech/" + quote(voice, safe=""), speech_request(turn.text, panel.story_tone()))
     log.info("panel_tts characters=%d", len(turn.text))
-    return base64.b64encode(audio).decode()
+    return base64.b64encode(audio).decode(), len(audio) / MP3_BYTES_PER_SECOND
 
 
 @router.post("")
@@ -239,6 +271,7 @@ async def stop(key: UUID):
     item = sessions.pop(key, None)
     if item:
         item.generation += 1
+        item.prefetch = None
 
 
 @router.post("/{key}/interrupt")
@@ -255,6 +288,7 @@ async def interrupt(key: UUID, step: Step):
     item.generation = step.generation
     item.busy = False
     item.pending = None
+    item.prefetch = None
     return {"generation": item.generation}
 
 
@@ -263,10 +297,38 @@ async def next_segment(key: UUID, step: Step):
     return await produce_segment(key, step)
 
 
+def segment(panel, progress=None):
+    """Draft, verify and voice the next turn of a panel snapshot. Runs in a worker thread."""
+    persona = panel.personas[panel.speaker()]
+    turn, cards = panel.draft(model(persona.llm_model), model())
+    if progress:
+        progress({"status": "Rendering verified audio…"})
+    audio, seconds = render(panel, turn)
+    token = uuid4()
+    payload = {"id": token, "speaker": persona.name, "host": panel.personas[panel.host].name,
+               "guests": [panel.personas[i].name for i in panel.roster], "story": panel.story.headline,
+               "text": spoken_text(turn.text), "sources": cards, "audio": audio}
+    return token, turn, cards, seconds, payload
+
+
+def start_prefetch(item):
+    """While the listener hears the pending segment, draft the one after it, assuming it is heard in full.
+    produce_segment uses it only if the real floor state matches; otherwise it is discarded."""
+    token, turn, cards = item.pending
+    panel = item.panel.fork()
+    panel.heard(turn, cards, item.pending_seconds, True)
+    if panel.index == len(panel.stories):
+        return
+    item.prefetch = Prefetch(token, item.generation, panel.state(),
+                             asyncio.create_task(run_in_threadpool(segment, panel)))
+    item.prefetch.task.add_done_callback(lambda task: task.cancelled() or task.exception())  # no unhandled warnings
+
+
 async def produce_segment(key, step, progress=None):
     item = session(key)
     if item.busy or step.generation != item.generation:
         raise HTTPException(409, "Turn superseded or in progress.")
+    prefetch, item.prefetch = item.prefetch, None
     if item.pending:
         token, turn, cards = item.pending
         if token != step.heard:
@@ -278,25 +340,25 @@ async def produce_segment(key, step, progress=None):
     if step.question.strip():
         item.panel.question = step.question.strip()
         item.panel.history.append(DiscussionLine(speaker="Listener", text=item.panel.question))
-    # Snapshot the floor while provider work runs. Articles and reviews are shared read-only.
-    panel = copy(item.panel)
-    panel.history = list(item.panel.history)
-    persona = panel.personas[panel.speaker()]
     item.busy = True
     try:
-        turn, cards = await run_in_threadpool(panel.draft, model(persona.llm_model), model())
+        result = None
+        if (prefetch and prefetch.after == step.heard and prefetch.generation == item.generation
+                and prefetch.state == item.panel.state()):
+            try:
+                result = await prefetch.task
+            except (ValueError, RuntimeError, OSError) as exc:
+                log.warning("Prefetched turn failed, drafting again: %s: %s", type(exc).__name__, exc)
+        if result is None:
+            # Snapshot the floor while provider work runs. Articles and reviews are shared read-only.
+            result = await run_in_threadpool(segment, item.panel.fork(), progress)
         if item.generation != step.generation:
             raise HTTPException(409, "Turn superseded.")
-        if progress:
-            progress({"status": "Rendering verified audio…"})
-        audio = await run_in_threadpool(render, panel, turn)
-        if item.generation != step.generation:
-            raise HTTPException(409, "Audio superseded.")
-        token = uuid4()
+        token, turn, cards, seconds, payload = result
         item.pending = token, turn, cards
-        return {"id": token, "speaker": persona.name, "host": panel.personas[panel.host].name,
-                "guests": [panel.personas[i].name for i in panel.roster], "story": panel.story.headline,
-                "text": turn.text, "sources": cards, "audio": audio}
+        item.pending_seconds = seconds
+        start_prefetch(item)
+        return payload
     except (ValueError, RuntimeError, OSError) as exc:
         log.warning("Panel turn failed: %s: %s", type(exc).__name__, exc)
         raise HTTPException(502, "Turn unavailable. Check model and speaker voice settings.") from None

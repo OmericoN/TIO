@@ -1,5 +1,6 @@
 import asyncio
 import json
+import os
 import threading
 import time
 import unittest
@@ -11,7 +12,7 @@ from fastapi import HTTPException
 
 from api import panel as api
 from discussion.costs import project
-from discussion.panel import Citation, EvidenceReview, Finding, Panel, SpokenCitation, Turn, Verdict, evidence, passages, review_event, spoken_claim
+from discussion.panel import Citation, EvidenceReview, Finding, Panel, SpokenCitation, Turn, Verdict, evidence, passages, review_event, spoken_claim, spoken_text
 from discussion.personas import load_starter_personas
 from discussion.stories import Group, Groups, group_articles, load_index
 
@@ -254,7 +255,7 @@ class InterruptionTest(unittest.IsolatedAsyncioTestCase):
         def slow_render(*args):
             entered.set()
             release.wait(3)
-            return "audio"
+            return "audio", 1.0
 
         with patch.object(api, "model"), patch.object(Panel, "draft", return_value=(line(), [])), \
                 patch.object(api, "render", side_effect=slow_render):
@@ -266,7 +267,41 @@ class InterruptionTest(unittest.IsolatedAsyncioTestCase):
                 await pending
             self.assertEqual(exc.exception.status_code, 409)
             segment = await api.next_segment(key, api.Step(generation=1, question="Which source?"))
+            await item.prefetch.task  # let the speculative next turn finish while the mocks are active
             await api.interrupt(key, api.Step(generation=2, heard=segment["id"], seconds=0.5))
             self.assertIsNone(item.pending)
             self.assertEqual([row.speaker for row in item.panel.history], ["Listener"])
             self.assertIn("0.5s", item.panel.reference)
+
+
+class PrefetchTest(unittest.IsolatedAsyncioTestCase):
+    async def test_next_turn_is_prepared_while_the_current_one_plays(self):
+        key = uuid4()
+        item = api.Session(fixture())
+        item.touched = time.monotonic()
+        api.sessions[key] = item
+        self.addCleanup(api.sessions.pop, key, None)
+        drafts = iter(line(f"Line {i}.") for i in range(10))
+        with patch.object(api, "model"), patch.object(Panel, "draft", side_effect=lambda *a: (next(drafts), [])) as draft, \
+                patch.object(api, "render", return_value=("audio", 4.0)):
+            first = await api.next_segment(key, api.Step(generation=0))
+            await item.prefetch.task
+            self.assertEqual(draft.call_count, 2)                   # the second line was drafted during playback
+            second = await api.next_segment(key, api.Step(generation=0, heard=first["id"], seconds=4))
+            self.assertEqual((second["text"], draft.call_count), ("Line 1.", 2))   # served without waiting
+            await item.prefetch.task
+            # Skipped audio changes what comes next, so the speculative line is discarded and redrafted.
+            third = await api.next_segment(key, api.Step(generation=0, heard=second["id"], seconds=1,
+                                                         fully_heard=False))
+            self.assertEqual((third["text"], draft.call_count), ("Line 3.", 4))
+            await item.prefetch.task
+
+    def test_voice_settings_follow_the_story_tone(self):
+        self.assertLess(api.speech_request("Hi", "upbeat")["voice_settings"]["stability"],
+                        api.speech_request("Hi", "somber")["voice_settings"]["stability"])
+        with patch.dict(os.environ, {"PANEL_TTS_MODEL": "eleven_v3"}):
+            request = api.speech_request("[laughs] Hi", "upbeat")
+        self.assertEqual((request["model_id"], request["voice_settings"]), ("eleven_v3", {"stability": 0.0}))
+
+    def test_audio_tags_stay_out_of_transcripts(self):
+        self.assertEqual(spoken_text("[laughs] Well, [sighs] rates rose."), "Well, rates rose.")

@@ -40,6 +40,26 @@ async function streamTurn(id: string, body: object, status: (value: string) => v
   } finally { reader.releaseLock() }
 }
 
+// A soft two-note cue between stories, synthesized so no audio file is needed. Resolves when it has finished.
+function storyCue(context: AudioContext | null): Promise<void> {
+  if (!context || context.state === 'closed') return Promise.resolve()
+  void context.resume().catch(() => {})
+  const start = context.currentTime + 0.05
+  for (const [i, frequency] of [659.25, 987.77].entries()) {
+    const tone = context.createOscillator(), gain = context.createGain()
+    tone.type = 'sine'
+    tone.frequency.value = frequency
+    const at = start + i * 0.16
+    gain.gain.setValueAtTime(0, at)
+    gain.gain.linearRampToValueAtTime(0.12, at + 0.02)
+    gain.gain.exponentialRampToValueAtTime(0.001, at + 0.6)
+    tone.connect(gain).connect(context.destination)
+    tone.start(at)
+    tone.stop(at + 0.65)
+  }
+  return new Promise(resolve => setTimeout(resolve, 850))
+}
+
 type Props = {
   owner: string
   stories: Headline[]
@@ -62,6 +82,7 @@ export function PanelPlayer({ owner, stories, preferences, plan, recorded, origi
   const [record] = useState<Briefing>(() => ({ id: crypto.randomUUID(), date: new Date().toISOString(), titles: stories.map(s => s.title), entries: [], sample: recorded }))
   const sampleQueue = useRef<Segment[]>([])
   const previousStory = useRef('')
+  const cueContext = useRef<AudioContext | null>(origin.context)
   const dialog = useRef<HTMLDialogElement>(null)
   const consolePanel = useRef<HTMLDivElement>(null)
   const [question, setQuestion] = useState('')
@@ -106,13 +127,18 @@ export function PanelPlayer({ owner, stories, preferences, plan, recorded, origi
       return
     }
     setHost(segment.host)
+    let cue: Promise<void> = Promise.resolve()
     if (previousStory.current !== segment.story) {
       setGuests([])
+      if (previousStory.current) {
+        try { cueContext.current ??= new AudioContext() } catch { /* Play without the cue. */ }
+        cue = storyCue(cueContext.current)
+      }
       previousStory.current = segment.story
     }
     audio.src = audioUrl(segment)
     const opening = dialog.current?.getAnimations().filter(a => a.playState === 'running') ?? []
-    void Promise.allSettled(opening.map(a => a.finished)).then(() => {
+    void Promise.allSettled([cue, ...opening.map(a => a.finished)]).then(() => {
       if (current.current === segment && audio.isConnected) {
         void audio.play().catch(() => { if (current.current === segment) setStatus('Press play to listen.') })
       }
