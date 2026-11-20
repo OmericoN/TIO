@@ -12,7 +12,28 @@ Start FastAPI and Vite using the repository README. Use one FastAPI worker on lo
 
 ## Engine handoff
 
-`POST /api/panel` accepts `profile`, `minutes`, `mode` (panel or presenter), and an optional `ranked_guests` map keyed by story ID. This map carries the teammate recommender's final choices. With the database index and no map, the existing article matcher ranks database personas for each selected story. Resolve the moderator independently by slug `main-host`.
+To exercise the matcher from the local API, send a test shortlist request with the backend running and its database and provider credentials configured.
+
+```sh
+curl -sS http://127.0.0.1:8000/api/panel -H 'Content-Type: application/json' -d '{"profile":"Explain interest rates","mode":"panel","minutes":4,"test_shortlist":true}'
+```
+
+The backend reads up to 15 articles ordered by publication time descending and then article ID. This stand-in sends the article IDs, all guest persona IDs, and a count of two to the existing matcher once. Changing the listener profile changes the explanation. The shortlist stays fixed until the database articles change.
+
+For the recommender integration, call `matcher.match_personas(article_ids, candidate_agent_ids, n)` with 1–15 ranked articles and Tio excluded from the candidates. Pass its return value directly as `match_result` to `POST /api/panel`. For example, this Python payload starts a panel with an existing match.
+
+```python
+payload = {
+    "profile": listener_profile,
+    "minutes": 4,
+    "mode": "panel",
+    "match_result": matcher.match_personas(article_ids, candidate_agent_ids, 2),
+}
+```
+
+The backend loads original reporting and the `main-host` persona from the database, groups the shortlisted articles across languages, and orders topics by their first recommended article. Four minutes allows two topics. The first two ranked guests stay with Tio across the briefing. With one guest, Tio hosts an interview. With zero guests or in presenter mode, Tio presents solo. The matched and test paths work without a local story index.
+
+Requests without a match or test shortlist use sample or indexed stories. Its optional `ranked_guests` map is specific to that path. Each request can supply only one of `match_result`, `test_shortlist: true`, or `ranked_guests`.
 
 FastAPI returns a session ID. Post to `/{id}/events` under the same prefix to stream newline-delimited status and result events for one turn. Start at generation zero. Each result carries the speaker, story, transcript, claim-to-quote source cards and MP3 audio. When playback ends, request the next turn with the previous segment ID in `heard` and its duration in `seconds`. Full segments enter conversation history only on acknowledgement.
 
@@ -39,3 +60,5 @@ uv run --locked python -m discussion.costs ../.briefing/usage.log ../.briefing/r
 ```
 
 Replace 120 with measured billable microphone seconds. For a representative subset, set `--corpus-factor` to full article count divided by sampled article count and `--listener-factor` to target sessions divided by sampled sessions. The output estimates shared processing, per-listener work, and 10× volume with fixed or proportionally increased listeners. Estimates assume comparable article length, cache coverage, listener duration, and rates. Use provider billing for retries that failed before returning usage.
+
+Matched briefings log `session_grouping` and `session_evidence` as listener work alongside guest ranking, turn generation, verification, and voice rendering. The 15-article cap keeps the grouping input bounded as the corpus grows. Cache hits incur no model call. Include upstream matcher logs when another worker supplies the completed match.

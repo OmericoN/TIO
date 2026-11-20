@@ -2,6 +2,7 @@ import json
 import logging
 from http.client import HTTPException
 from typing import TypeVar
+from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 from pydantic import BaseModel
@@ -62,5 +63,12 @@ class OpenAIClient:
             if choice["finish_reason"] != "stop" or message.get("refusal"):
                 raise MatchProcessingError(f"OpenAI did not complete {stage}.")
             return output_type.model_validate_json(message["content"], strict=True)
+        except HTTPError as exc:
+            detail = f"OpenAI returned HTTP {exc.code} during {stage}."
+            if exc.code == 401:
+                detail += " Check OPENAI_API_KEY and restart the backend."
+            raise MatchProcessingError(detail) from exc
+        except (TimeoutError, URLError) as exc:
+            raise MatchProcessingError(f"The OpenAI request failed to connect or timed out during {stage}.") from exc
         except (OSError, HTTPException, ValueError, KeyError, IndexError, TypeError, AttributeError) as exc:
             raise MatchProcessingError(f"OpenAI could not process {stage}.") from exc

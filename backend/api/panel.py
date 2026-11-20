@@ -18,13 +18,15 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import StreamingResponse
 from psycopg.rows import dict_row
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError, model_validator
 
 from discussion.panel import Panel, Turn, model, passages, review_event, select_stories, source_set
 from discussion.agents import DiscussionLine
+from discussion.matched import CompletedMatch, InvalidMatch, matched_panel, test_shortlist
 from discussion.personas import AgentPersona, load_starter_personas
 from discussion.stories import INDEX, available_stories
 from research.matcher import REPO_ROOT, create_matcher
+from research.openai_client import MatchProcessingError
 
 log = logging.getLogger(__name__)
 
@@ -43,6 +45,14 @@ class Start(BaseModel):
     mode: Literal["panel", "presenter"] = "panel"
     minutes: int = Field(default=4, ge=1, le=15)
     ranked_guests: dict[str, list[UUID]] | None = None
+    match_result: CompletedMatch | None = None
+    test_shortlist: bool = False
+
+    @model_validator(mode="after")
+    def one_guest_source(self):
+        if sum((self.ranked_guests is not None, self.match_result is not None, self.test_shortlist)) > 1:
+            raise ValueError("Choose one of match_result, test_shortlist, or ranked_guests.")
+        return self
 
 
 class Step(BaseModel):
@@ -67,8 +77,7 @@ sessions: dict[UUID, Session] = {}
 matcher = lru_cache(maxsize=1)(create_matcher)
 
 
-def make_panel(start):
-    load_dotenv(REPO_ROOT / ".env")
+def indexed_or_sample_panel(start):
     news_events = [s for s in available_stories() if any(not a.official_release for a in s.articles)]
     stories = select_stories(news_events, start.profile, start.minutes, model())
     if INDEX.exists():
@@ -83,7 +92,6 @@ def make_panel(start):
     candidates = [i for i in personas if i != host]
     guests = {}
     tones = {}
-    reviews = {}
     for story in stories:
         if start.mode == "presenter":
             ids = []
@@ -99,13 +107,28 @@ def make_panel(start):
         if len(set(ids)) != len(ids) or any(i not in candidates for i in ids):
             raise ValueError("Invalid guest roster.")
         guests[story.id] = ids
+    return Panel(stories, personas, host, guests, start.profile, start.mode, start.minutes, tones=tones)
+
+
+def make_panel(start):
+    load_dotenv(REPO_ROOT / ".env")
+    result = start.match_result
+    if start.test_shortlist:
+        article_ids, guest_ids, count = test_shortlist()
+        result = CompletedMatch.model_validate(matcher().match_personas(article_ids, guest_ids, count))
+    if result is not None:
+        panel = matched_panel(result, start.profile, start.mode, start.minutes, model())
+        stage = "session_evidence"
+    else:
+        panel = indexed_or_sample_panel(start)
+        stage = "event_evidence"
+    for story in panel.stories:
         excerpts = passages(story, story.headline)
         rows = [{**a.model_dump(mode="json", exclude={"body"}),
                  "passages": [e.excerpt for e in excerpts if e.article_id == a.id]}
                 for a in source_set(story)]
-        reviews[story.id] = review_event(model().model, json.dumps(rows, ensure_ascii=False))
-    return Panel(stories, personas, host, guests, start.profile, start.mode, start.minutes,
-                 reviews=reviews, tones=tones)
+        panel.reviews[story.id] = review_event(model().model, json.dumps(rows, ensure_ascii=False), stage)
+    return panel
 
 
 def eleven(path, body):
@@ -139,12 +162,23 @@ async def start_panel(start: Start):
         raise HTTPException(429, "Panel session limit reached.")
     try:
         panel = await run_in_threadpool(make_panel, start)
+    except InvalidMatch as exc:
+        raise HTTPException(422, str(exc)) from None
     except (ValueError, RuntimeError, KeyError, OSError, psycopg.Error) as exc:
-        log.warning("Panel setup failed: %s", type(exc).__name__)
-        raise HTTPException(503, "Check the panel model, source index and persona configuration.") from None
+        if isinstance(exc, ValidationError):
+            field = exc.errors(include_input=False, include_context=False)[0]["loc"]
+            detail = f"Invalid {exc.title} data at {'.'.join(map(str, field))}."
+        elif isinstance(exc, MatchProcessingError) or type(exc) in (ValueError, RuntimeError):
+            detail = str(exc)
+        elif isinstance(exc, psycopg.Error):
+            detail = "Could not read the panel database. Check DATABASE_URL and the database connection."
+        else:
+            detail = f"Check the panel environment and source data ({type(exc).__name__})."
+        log.warning("Panel setup failed: %s", detail)
+        raise HTTPException(503, detail) from None
     key = uuid4()
     sessions[key] = Session(panel, touched=now)
-    return {"id": key, "sample": not INDEX.exists()}
+    return {"id": key, "sample": not start.test_shortlist and start.match_result is None and not INDEX.exists()}
 
 
 def session(key):

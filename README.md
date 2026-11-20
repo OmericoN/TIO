@@ -18,6 +18,8 @@ The [full project brief](docs/project-brief.md) records the judging criteria, de
 
 After signing in, open **Discussion** for a briefing with a main host and up to two recommended guest experts. The player shows the active segment’s cited passages and accepts spoken or typed questions. Open **Live host** for the standalone voice preview. See the [panel engine guide](docs/panel-engine.md) for provider setup, source indexing and cost measurement.
 
+The panel API can start a discussion from a completed host match or exercise the matcher with up to 15 recent database articles. See the [matcher handoff](docs/panel-engine.md#engine-handoff).
+
 ## Run locally
 
 Install [uv](https://docs.astral.sh/uv/), [Bun](https://bun.sh/), and Node.js 22.12+ in the 22.x line or a newer supported LTS release. From the repository root, start the FastAPI backend in one terminal.
