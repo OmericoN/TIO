@@ -42,15 +42,12 @@ a { text-underline-offset: .2em; }
   border-bottom-color: #3a4239;
 }
 .workspace .publication { color: #e2e4d5; border-color: #75806d; }
-.workspace .brand-mark { background: #404a40; }
 .masthead-inner, .brand-lockup, .brand, .workspace-nav button, .cover-meta, .button {
   display: flex; align-items: center;
 }
 .masthead-inner { min-height: 76px; justify-content: space-between; gap: 20px; }
 .brand-lockup { gap: 18px; }
-.brand { gap: 9px; font-weight: 700; letter-spacing: -.055em; font-size: 27px; line-height: 1; }
-.brand-mark { display: grid; place-items: center; width: 32px; height: 32px; color: var(--gold); background: var(--forest); border-radius: 9px; }
-.brand-mark .icon { width: 21px; height: 21px; stroke-width: 2.2px; }
+.brand { display: grid; place-items: center; font-weight: 700; letter-spacing: -.055em; font-size: 27px; line-height: 1; }
 .publication { border-left: 1px solid #cbcdc1; padding-left: 18px; font: italic 21px/1 var(--display); color: var(--muted); }
 .article-search, .workspace-nav {
   border-radius: 999px;

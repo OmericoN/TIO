@@ -1,5 +1,4 @@
 const icons = {
-  signal: 'M3 10v4m4-8v12m5-16v20m5-17v14m4-10v6',
   feed: 'M3 5h18v14H3z M7 9h4v6H7z M14 9h3m-3 3h3m-3 3h3',
   discussion: 'M3 11a9 9 0 0 1 18 0v5a2 2 0 0 1-2 2h-2v-7h4 M3 11h4v7H5a2 2 0 0 1-2-2z',
   voice: 'M9 6a3 3 0 1 1 6 0v5a3 3 0 1 1-6 0z M5 10v1a7 7 0 0 0 14 0v-1m-7 8v3m-3 0h6',
@@ -13,7 +12,7 @@ export function Icon({ name }: { name: keyof typeof icons }) {
 }
 
 export function Brand() {
-  return <span className="brand"><span className="brand-mark"><Icon name="signal" /></span>TIO</span>
+  return <span className="brand">TIO</span>
 }
 
 // Each line interpolates between two curves to give the audio ribbon its twist.
