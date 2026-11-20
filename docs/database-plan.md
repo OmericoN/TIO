@@ -81,6 +81,7 @@ User embedding (also on `profiles`, all nullable):
 - `catchphrases text[]`, `do_rules text[]`, `dont_rules text[]`, `intro_template`, `outro_template`
 - Voice/TTS: `voice_provider`, `voice_id`, `voice_settings jsonb`
 - LLM: `llm_model text`, `temperature real`, `max_episode_minutes smallint`
+- Embedding (all nullable): `embedding vector(1536)` (OpenAI `text-embedding-3-large`, comparable with article and profile vectors), `embedding_source text` (which text was embedded), `embedding_model text`, `embedded_at timestamptz`. Migration `20261120230000_persona_embeddings.sql`.
 
 ## 3. News
 Every data point in the JSONL files maps to a column. `publication` and `publisher` are normalised into their own tables because only 6 distinct values exist.
