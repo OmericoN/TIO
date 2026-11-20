@@ -4,6 +4,8 @@ import { createRoot } from 'react-dom/client'
 import { NewsWorkspace } from './NewsWorkspace'
 import { sampleArticle } from './briefings'
 import { AudioRibbon, Brand } from './Brand'
+import { VoiceAuditions } from './VoiceAuditions'
+import { BriefingLengthPicker } from './BriefingLengthPicker'
 import './styles.css'
 
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL?.trim().replace(/\/+$/, '')
@@ -14,6 +16,7 @@ const demoAvailable = import.meta.env.DEV && ['localhost', '127.0.0.1', '[::1]']
 const externalTermsUrl = import.meta.env.VITE_TERMS_URL?.trim()
 const bundledTermsPath = '/terms-v1.html'
 const termsUrl = externalTermsUrl?.startsWith('https://') ? externalTermsUrl : bundledTermsPath
+const signupSteps = ['About you', 'Preferences', 'Voices', 'Your account']
 const fieldClass = 'form-field'
 const interestOptions = [
   'Stock markets', 'Technology', 'Central banks and inflation',
@@ -84,10 +87,7 @@ function OnboardingFields({ step }: { step: number }) {
           What do you want from your briefing?
           <textarea name="listener_goal" rows={3} required maxLength={500} className={fieldClass} />
         </label>
-        <label className="block text-sm font-medium">
-          Preferred listening time
-          <input name="preferred_listen_time" type="time" className={fieldClass} />
-        </label>
+        <BriefingLengthPicker />
         <fieldset className="interest-options">
           <legend className="mb-2 text-sm font-medium">Which topics interest you?</legend>
           {interestOptions.map(interest => (
@@ -126,11 +126,12 @@ function App() {
   const [signInEmail, setSignInEmail] = useState('')
   const [creatingAccount, setCreatingAccount] = useState(false)
   const [step, setStep] = useState(0)
+  const [preferredPersonaIds, setPreferredPersonaIds] = useState<string[]>([])
   const authRef = useRef<HTMLElement>(null)
 
   useEffect(() => {
     authRef.current?.querySelector<HTMLElement>(
-      'fieldset:not([hidden]) > label > input, fieldset:not([hidden]) select:not(fieldset[hidden] select)',
+      'fieldset:not([hidden]) > label > input, fieldset:not([hidden]) select:not(fieldset[hidden] select), .voice-auditions input',
     )?.focus()
   }, [creatingAccount, step])
 
@@ -138,6 +139,7 @@ function App() {
 
   function switchMode() {
     setCreatingAccount(!creatingAccount)
+    setPreferredPersonaIds([])
     setStep(0)
     setError('')
     setNotice('')
@@ -199,6 +201,11 @@ function App() {
       return
     }
 
+    if (creatingAccount && step === 2) {
+      setStep(3)
+      return
+    }
+
     if (!configured) {
       setError('Supabase sign-in is not configured.')
       return
@@ -222,8 +229,9 @@ function App() {
         preferred_language: primaryLanguage,
         secondary_language: secondaryLanguage || null,
         listener_goal: text('listener_goal'),
-        preferred_listen_time: text('preferred_listen_time') || null,
+        briefing_length_minutes: Number(text('briefing_length_minutes')) || null,
         interests_text: interests.join(', '),
+        preferred_persona_ids: preferredPersonaIds,
         accepted_terms: true,
         terms_url: termsUrl,
       },
@@ -288,17 +296,33 @@ function App() {
   return (
     <main className="auth-page">
       <header className="masthead"><div className="masthead-inner"><div className="brand-lockup"><Brand /><span className="publication">The Liquid Briefing</span></div></div></header>
-      <div className="auth-layout">
+      <div className={creatingAccount ? 'auth-layout signup-layout' : 'auth-layout'}>
         <aside className="auth-cover">
           <AudioRibbon />
           <div><h2>The Liquid <em>Briefing</em></h2><p>Personalized audio news with the sources behind every story.</p></div>
         </aside>
         <section ref={authRef} aria-labelledby="login-title" className="auth-form">
           <h1 id="login-title">{creatingAccount ? 'Create a TIO account' : 'Sign in to TIO'}</h1>
-          {creatingAccount && <p className="mt-2 text-sm text-slate-600">Step {step + 1} of 3</p>}
+          {creatingAccount && (
+            <ol className="signup-progress" aria-label="Signup progress">
+              {signupSteps.map((label, index) => (
+                <li key={label} aria-current={index === step ? 'step' : undefined}>
+                  {label}
+                </li>
+              ))}
+            </ol>
+          )}
           <form key={action} onSubmit={submitAuth} noValidate className="mt-6 space-y-4">
             {creatingAccount && <OnboardingFields step={step} />}
-            <fieldset hidden={creatingAccount && step !== 2} className="space-y-4">
+            {creatingAccount && step === 2 && (
+              <VoiceAuditions
+                selectedIds={preferredPersonaIds}
+                onToggle={id => setPreferredPersonaIds(ids => (
+                  ids.includes(id) ? ids.filter(selectedId => selectedId !== id) : [...ids, id]
+                ))}
+              />
+            )}
+            <fieldset hidden={creatingAccount && step !== 3} className="space-y-4">
               {creatingAccount && <legend className="pr-2 font-semibold">Your account</legend>}
               <label className="block text-sm font-medium">
                 Email
@@ -348,7 +372,7 @@ function App() {
               disabled={pending}
               className="button w-full"
             >
-              {pending ? 'Please wait…' : creatingAccount && step < 2 ? 'Continue' : action}
+              {pending ? 'Please wait…' : creatingAccount && step < 3 ? 'Continue' : action}
             </button>
             {creatingAccount && step > 0 && (
               <button

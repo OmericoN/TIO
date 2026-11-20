@@ -1,5 +1,6 @@
 import json
-from urllib.parse import urlencode
+from functools import lru_cache
+from urllib.parse import quote, urlencode, urlsplit
 from urllib.request import Request, urlopen
 
 from pydantic import BaseModel, Field
@@ -17,3 +18,14 @@ def request_session(*, api_key: str, agent_id: str) -> VoiceSession:
     request.add_unredirected_header("xi-api-key", api_key)
     with urlopen(request, timeout=5) as upstream:
         return VoiceSession.model_validate(json.load(upstream))
+
+
+@lru_cache(maxsize=128)
+def voice_preview_url(*, api_key: str, voice_id: str) -> str:
+    request = Request(f"https://api.elevenlabs.io/v1/voices/{quote(voice_id, safe='')}")
+    request.add_unredirected_header("xi-api-key", api_key)
+    with urlopen(request, timeout=5) as upstream:
+        preview = json.load(upstream).get("preview_url")
+    if not isinstance(preview, str) or urlsplit(preview).scheme != "https":
+        raise ValueError("Voice sample is unavailable")
+    return preview
