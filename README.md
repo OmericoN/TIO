@@ -18,6 +18,8 @@ The [full project brief](docs/project-brief.md) records the judging criteria, de
 
 In **News feed**, swipe right to include a headline or left to skip it. The Include and Skip buttons also work with a keyboard. Select up to six headlines, then tap the host orb beside the dock. The host introduces the panel, and each speaker’s audio appears alongside its supporting sources. **Briefings** keeps the conversation, citations and audio in this browser for replay or deletion. The fictional recorded edition works without provider credentials. With a configured backend, use **Briefing settings** for a live listener profile, format and duration. See the [panel engine guide](docs/panel-engine.md) for provider setup and cost measurement.
 
+The panel API can start a discussion from a completed host match or exercise the matcher with up to 15 recent database articles. See the [matcher handoff](docs/panel-engine.md#engine-handoff).
+
 ## Run locally
 
 Install [uv](https://docs.astral.sh/uv/), [Bun](https://bun.sh/), and Node.js 22.12+ in the 22.x line or a newer supported LTS release. From the repository root, start the FastAPI backend in one terminal.
