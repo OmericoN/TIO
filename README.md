@@ -38,6 +38,8 @@ bun run dev
 
 Open the URL Vite prints, usually [http://localhost:5173](http://localhost:5173). Check [backend health](http://127.0.0.1:8000/api/health) or open the [interactive API docs](http://127.0.0.1:8000/docs).
 
+For a local demo, select **Open demo in a new tab** on the sign-in screen or open [the demo workspace](http://localhost:5173/demo) directly. Demo access is available on localhost with the Vite development server.
+
 Both servers can start without provider credentials. To use **Start voice preview**, configure `ELEVENLABS_API_KEY` and `ELEVENLABS_AGENT_ID` in the backend environment, enable the agent's **System prompt** override, and allow microphone access. See the [voice preview setup](docs/live-voice.md#test-the-existing-elevenagents-preview) for the full steps.
 
 ## Guides

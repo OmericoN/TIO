@@ -7,6 +7,7 @@ import './styles.css'
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL?.trim().replace(/\/+$/, '')
 const publishableKey = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY?.trim()
 const configured = Boolean(supabaseUrl && publishableKey?.startsWith('sb_publishable_'))
+const demoAvailable = import.meta.env.DEV && ['localhost', '127.0.0.1', '[::1]'].includes(window.location.hostname)
 
 const externalTermsUrl = import.meta.env.VITE_TERMS_URL?.trim()
 const bundledTermsPath = '/terms-v1.html'
@@ -373,6 +374,11 @@ function App() {
             >
               {creatingAccount ? 'Back to sign in' : 'Create an account'}
             </button>
+            {demoAvailable && !creatingAccount && (
+              <a href="/demo" target="_blank" rel="noopener" className="mt-4 block w-fit text-sm font-medium text-slate-700 underline">
+                Open demo in a new tab
+              </a>
+            )}
           </section>
         </div>
       )}
@@ -380,4 +386,8 @@ function App() {
   )
 }
 
-createRoot(document.getElementById('root')!).render(<App />)
+createRoot(document.getElementById('root')!).render(
+  demoAvailable && window.location.pathname === '/demo'
+    ? <main><NewsWorkspace /></main>
+    : <App />,
+)
