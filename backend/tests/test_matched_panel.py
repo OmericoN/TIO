@@ -126,10 +126,6 @@ class MatchedPanelTest(unittest.IsolatedAsyncioTestCase):
         article_ids = [a.id for a in self.revenue.articles + self.rates.articles]
         article_rows = dict(art(a.id, (1, 0) if a in self.rates.articles else (0, 1),
                                 pub=a.publisher) for a in self.ordered)
-        repository = Mock()
-        repository.get_articles_by_ids.return_value = {i: dict(id=i, categories=[]) for i in article_ids}
-        repository.get_personas_by_ids.return_value = {i: dict(id=i) for i in guests}
-        matcher = PersonaMatcher(repository, self.client)
         conn = Mock()
         conn.execute.return_value.fetchone.return_value = (host_id,)
         conn.execute.return_value.fetchall.return_value = [(144,)]
@@ -138,8 +134,10 @@ class MatchedPanelTest(unittest.IsolatedAsyncioTestCase):
         with (patch("briefing.generate.load_listener", return_value=listener),
               patch("briefing.generate.rank_hosts", return_value=[host_id, *guests]),
               patch("briefing.generate.host_affinity", return_value={}),
-              patch("briefing.generate.load_articles", return_value=article_rows)):
-            plan = generate(conn, "fixture", article_ids, selected, 1, "debate", matcher=matcher)
+              patch("briefing.generate.load_articles", return_value=article_rows),
+              patch("briefing.generate.load_tones", side_effect=lambda _, ids: dict.fromkeys(ids, "neutral")),
+              patch("briefing.generate.pick_hosts", side_effect=lambda _, ranked, tones, n: ranked[:n])):
+            plan = generate(conn, "fixture", article_ids, selected, 1, "debate")
         self.assertGreater(plan["estimated_minutes"], 1)
         self.assertEqual(plan["hosts"], guests)
         self.assertEqual(list(plan["tones"]), plan["article_ids"])

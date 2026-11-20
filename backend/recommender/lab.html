@@ -200,7 +200,7 @@ async function generatePlan(e) {
     const plan = await api("/api/briefing/generate", body);
     Object.assign(state.info, await api("/api/recommend/lookup", { article_ids: plan.article_ids }));
     const s = Math.round((performance.now() - t0) / 1000);
-    status.textContent = `${plan.estimated_minutes} of ${plan.requested_minutes} min · ${plan.segments.length} stories · ${plan.article_ids.length} articles · ${plan.added_article_ids.length} added, ${plan.dropped_article_ids.length} dropped · ${s} s` + (plan.matcher_error ? ` · matcher: ${plan.matcher_error}` : "");
+    status.textContent = `${plan.estimated_minutes} of ${plan.requested_minutes} min · ${plan.segments.length} stories · ${plan.article_ids.length} articles · ${plan.added_article_ids.length} added, ${plan.dropped_article_ids.length} dropped · ${s} s` + (plan.untoned_article_ids.length ? ` · ${plan.untoned_article_ids.length} without a tone` : "");
     const personas = Object.fromEntries(state.catalog.personas.map(p => [p.id, p]));
     const hosts = el("div", { class: "hosts" });
     plan.hosts.forEach(id => { const p = personas[id] || { name: id, slug: "" }; hosts.append(el("div", { class: "host" }, el("b", { text: p.name }), el("span", { class: "muted", text: p.slug }))); });

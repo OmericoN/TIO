@@ -1,11 +1,13 @@
 import unittest
 from datetime import datetime, timedelta, timezone
-from unittest.mock import Mock, patch
+from unittest.mock import MagicMock, Mock, patch
+
+import psycopg
 
 from pydantic import ValidationError
 
 from api.briefing import GenerateRequest
-from briefing.generate import generate, group_stories, run_matcher
+from briefing.generate import generate, group_stories, load_tones, pick_hosts
 from briefing.timing import (MAX_S, MIN_S, OVERHEAD_S, TRANSITION_S, Story, fit, story_seconds, total_seconds)
 from main import app
 from recommender.recommend import Article, Listener
@@ -70,71 +72,53 @@ class GroupingTest(unittest.TestCase):
 
 
 class GenerateTest(unittest.TestCase):
-    def test_vetoed_guests_are_not_used_and_refill_preserves_filters(self) -> None:
+    def test_plan_uses_preset_tones_and_refill_preserves_filters(self) -> None:
         conn = Mock()
         conn.execute.return_value.fetchone.return_value = ("moderator",)
         conn.execute.return_value.fetchall.return_value = [(144,)]
         listener = Listener([1, 0], ["en"], preferences="Explain rates")
-        matcher = Mock()
-        matcher.match_personas.return_value = {
-            "articles": [{"article_id": "keep", "desired_tone": "serious"}], "agent_ids": [],
-        }
         with (patch("briefing.generate.load_listener", return_value=listener),
-              patch("briefing.generate.rank_hosts", return_value=["moderator", "guest"]),
+              patch("briefing.generate.rank_hosts", return_value=["moderator", "joker", "calm"]),
               patch("briefing.generate.host_affinity", return_value={}),
               patch("briefing.generate.load_articles", return_value=dict([art("keep")])) as load,
+              patch("briefing.generate.load_tones", return_value={"keep": "serious"}),
+              patch("briefing.generate.pick_hosts", return_value=["calm"]) as pick,
               patch("briefing.generate.recommend", return_value={"article_ids": []}) as refill):
-            plan = generate(conn, "u1", ["keep", "dismissed"], [], 5, "debate", matcher=matcher,
-                            days=2, excluded_article_ids=["dismissed"])
+            plan = generate(conn, "u1", ["keep", "dismissed"], [], 5, "debate", days=2,
+                            excluded_article_ids=["dismissed"])
         load.assert_called_once_with(conn, ["keep"])
         refill.assert_called_once_with(conn, listener, None, excluded_article_ids=["dismissed", "keep"],
                                        days=2, limit=30)
-        matcher.match_personas.assert_called_once_with(["keep"], ["guest"], 1)
-        self.assertEqual((plan["article_ids"], plan["tones"], plan["hosts"], plan["hosts_from_matcher"]),
-                         (["keep"], {"keep": "serious"}, [], False))
+        pick.assert_called_once_with(conn, ["joker", "calm"], {"keep": "serious"}, 2)  # Tio moderates a debate
+        self.assertEqual((plan["article_ids"], plan["tones"], plan["hosts"], plan["untoned_article_ids"]),
+                         (["keep"], {"keep": "serious"}, ["calm"], []))
 
 
-class MatcherTest(unittest.TestCase):
-    def test_chunks_merge_tones_and_require_every_chunk_to_accept(self) -> None:
-        class Matcher:
-            calls = 0
-            def match_personas(self, ids, candidates, n):
-                Matcher.calls += 1
-                if Matcher.calls == 2:
-                    raise RuntimeError("mixed up ids")        # second call fails once, then the retry works
-                ok = ["h1", "h2"] if ids[0] == "a0" else ["h2"]
-                return {"articles": [{"article_id": i, "desired_tone": "neutral"} for i in ids], "agent_ids": ok}
-        ids = [f"a{i}" for i in range(30)]
-        tones, accepted, error = run_matcher(Matcher(), ids, ["h1", "h2", "h3"])
-        self.assertEqual(len(tones), 30)
-        self.assertEqual(accepted, {"h2"})
-        self.assertIsNone(error)
+class HostTest(unittest.TestCase):
+    def conn(self, humor):
+        conn = Mock()
+        conn.execute.return_value.fetchall.return_value = list(humor.items())
+        return conn
 
-    def test_a_chunk_that_keeps_failing_is_reported(self) -> None:
-        class Broken:
-            def match_personas(self, *args):
-                raise RuntimeError("down")
-        tones, accepted, error = run_matcher(Broken(), ["a"], ["h1"])
-        self.assertEqual((tones, accepted, error), ({}, set(), "down"))
+    def test_sensitive_tone_skips_jokey_hosts_in_listener_order(self) -> None:
+        conn = self.conn({"joker": 5, "wry": 3, "calm": 1, "dry": 2})
+        ranked = ["joker", "wry", "calm", "dry"]
+        self.assertEqual(pick_hosts(conn, ranked, {"a": "upbeat"}, 2), ["joker", "wry"])
+        self.assertEqual(pick_hosts(conn, ranked, {"a": "upbeat", "b": "serious"}, 2), ["wry", "calm"])
+        self.assertEqual(pick_hosts(conn, ranked, {"a": "serious", "b": "somber"}, 2), ["calm", "dry"])
+        self.assertEqual(pick_hosts(conn, ranked, {}, 1), ["joker"])
 
-    def test_incomplete_chunk_preserves_earlier_tones_without_approving_hosts(self) -> None:
-        ids = [f"a{i}" for i in range(26)]
-        matcher = Mock()
-        first = {"articles": [{"article_id": i, "desired_tone": "neutral"} for i in ids[:25]], "agent_ids": ["h1"]}
-        incomplete = {"articles": [], "agent_ids": ["h1"]}
-        matcher.match_personas.side_effect = [first, incomplete, incomplete]
-        tones, accepted, error = run_matcher(matcher, ids, ["h1"])
-        self.assertEqual(list(tones), ids[:25])
-        self.assertEqual(accepted, set())
-        self.assertIn("input order", error)
+    def test_tones_come_from_the_article_column(self) -> None:
+        conn = MagicMock()
+        conn.execute.return_value.fetchall.return_value = [("a", "somber")]
+        self.assertEqual(load_tones(conn, ["a", "b"]), {"a": "somber"})
+        self.assertEqual(load_tones(conn, []), {})
 
-    def test_no_guest_candidates_still_gets_tones(self) -> None:
-        matcher = Mock()
-        matcher.match_personas.return_value = {
-            "articles": [{"article_id": "a", "desired_tone": "neutral"}], "agent_ids": [],
-        }
-        self.assertEqual(run_matcher(matcher, ["a"], []), ({"a": "neutral"}, set(), None))
-        matcher.match_personas.assert_called_once_with(["a"], [], 1)
+    def test_missing_tone_column_plans_without_tones(self) -> None:
+        conn = MagicMock()
+        conn.execute.side_effect = psycopg.errors.UndefinedColumn("column tone does not exist")
+        with self.assertLogs("briefing.generate", level="WARNING"):
+            self.assertEqual(load_tones(conn, ["a"]), {})
 
 
 class EndpointTest(unittest.TestCase):

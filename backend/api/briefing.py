@@ -34,20 +34,20 @@ class GeneratePlan(BaseModel):
     article_ids: list[str] = Field(description="Final articles, story by story.")
     profile: str
     persona_ids: list[str] = Field(description="Every persona, ordered by the listener's preferences.")
-    hosts: list[str] = Field(description="1 (presenter) or 2 (debate) personas, our order minus the matcher's vetoes.")
-    hosts_from_matcher: bool
-    tones: dict[str, str] = Field(description="Tone per article from the matcher (empty if it failed).")
+    hosts: list[str] = Field(description="1 (presenter) or 2 (debate) personas: the listener's order, minus hosts "
+                                         "too jokey for the plan's most sensitive tone.")
+    tones: dict[str, str] = Field(description="Preset tone per article (articles.tone).")
     segments: list[PlannedStory]
     estimated_minutes: float
     requested_minutes: float
     dropped_article_ids: list[str]
     added_article_ids: list[str]
-    matcher_error: str | None
+    untoned_article_ids: list[str] = Field(description="Planned articles with no preset tone yet.")
 
 
 @router.post("/generate")
 def generate_briefing(body: GenerateRequest, request: Request) -> GeneratePlan:
-    """Fit the recommended list to the chosen length (drop or add articles), then run the tone matcher."""
+    """Fit the recommended list to the chosen length (drop or add articles), then pick hosts that suit the tones."""
     if request.client is None or request.client.host not in {"127.0.0.1", "::1"}:
         raise HTTPException(status_code=403, detail="Generate is limited to local development.")
     try:

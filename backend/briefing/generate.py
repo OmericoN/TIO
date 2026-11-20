@@ -1,4 +1,4 @@
-"""Generate: turn the recommended list into a plan that fits the listener's chosen length, then add tones.
+"""Generate: turn the recommended list into a plan that fits the listener's chosen length, then pick the hosts.
 
 1. Group the articles into stories (one event, its articles from every outlet), with the recommender's own
    same-event rule, so timing is per story, pruning never splits a story's sources, and the script covers each
@@ -7,43 +7,30 @@
    rest. Too little: ask the recommender for its next articles (excluding everything already listed) and fit again,
    until the length is filled or nothing new comes back; then the plan is shorter and says so.
 3. Personas: the recommender's ordering for this listener (mostly their past preferences).
-4. Matcher (research/matcher.py, unchanged): a tone for every kept article, and which of our top personas suit
-   those tones. Hosts = the first 1 (presenter) or 2 (debate) of our order that it accepts.
+4. Tones and hosts, without an LLM: each article's tone is preset in articles.tone. Hosts = the first 1 (presenter)
+   or 2 (debate) personas in our order whose humor suits the most sensitive tone in the plan (MAX_HUMOR).
 """
 
 import logging
-from threading import Lock
+
+import psycopg
 
 from briefing.timing import DEFAULT_WPM, FILLED, Story, fit, story_seconds, total_seconds
 from recommender.embeddings import from_pgvector
 from recommender.hosts import host_affinity, rank_hosts
 from recommender.focus import parse_focus
 from recommender.recommend import Article, _Index, load_listener, recommend
-from research.openai_client import MatchProcessingError
 
 logger = logging.getLogger(__name__)
 
-MATCHER_CANDIDATES = 5      # top personas the matcher rates
-MATCHER_CHUNK = 25          # articles per matcher call: its model mixes up IDs on long lists, so long plans go in
-                            # chunks (one retry each); a host must suit every chunk
 EXTEND_ROUNDS = 3
 EXTEND_BATCH = 30           # articles asked from the recommender per extension round
-
-_matcher = None
-_matcher_lock = Lock()
+# A host whose humor_level (1-5) is above this never presents a plan with a story in that tone: no jokes on a death.
+MAX_HUMOR = {"somber": 2, "serious": 3}
 
 
 class UnknownSelectedArticles(ValueError):
     pass
-
-
-def _get_matcher():
-    global _matcher
-    with _matcher_lock:
-        if _matcher is None:
-            from research.matcher import create_matcher
-            _matcher = create_matcher()
-        return _matcher
 
 
 def load_articles(conn, ids: list[str]) -> dict[str, tuple[Article, int]]:
@@ -99,30 +86,30 @@ def _pace(conn, persona_ids: list[str]) -> float:
     return sum(paces) / len(paces) if paces else DEFAULT_WPM
 
 
-def run_matcher(matcher, article_ids: list[str], candidates: list[str]) -> tuple[dict[str, str], set[str], str | None]:
-    """Tones for every article and the candidates accepted for all of them. Returns (tones, accepted, error)."""
-    tones: dict[str, str] = {}
-    accepted = set(candidates)
-    errors = []
-    for start in range(0, len(article_ids), MATCHER_CHUNK):
-        chunk = article_ids[start:start + MATCHER_CHUNK]
-        for attempt in (1, 2):
-            try:
-                result = matcher.match_personas(chunk, candidates, max(1, len(candidates)))
-                if [row["article_id"] for row in result["articles"]] != chunk:
-                    raise MatchProcessingError("The matcher did not return the articles in input order.")
-                tones.update({row["article_id"]: row["desired_tone"] for row in result["articles"]})
-                accepted &= set(result["agent_ids"])
-                break
-            except Exception as err:  # noqa: BLE001 - keep the plan usable; report what failed
-                if attempt == 2:
-                    errors.append(str(err) or type(err).__name__)
-                    logger.warning("matcher failed on %d articles: %s", len(chunk), err)
-    return tones, set() if errors else accepted, "; ".join(errors) or None
+def load_tones(conn, ids: list[str]) -> dict[str, str]:
+    """Preset tone per article (articles.tone). Articles without one are left out; the hosts then deliver neutrally."""
+    if not ids:
+        return {}
+    try:
+        with conn.transaction():  # savepoint: a database without the column yet must not break the plan
+            rows = conn.execute("select id, tone from public.articles where id = any(%s) and tone is not null",
+                                (ids,)).fetchall()
+    except psycopg.errors.UndefinedColumn:
+        logger.warning("public.articles.tone is missing; planning without tones")
+        return {}
+    return dict(rows)
+
+
+def pick_hosts(conn, ranked: list[str], tones: dict[str, str], n: int) -> list[str]:
+    """The first n personas in the listener's order whose humor suits every tone in the plan."""
+    limit = min((MAX_HUMOR.get(t, 5) for t in tones.values()), default=5)
+    humor = dict(conn.execute("select id::text, humor_level from public.agent_personas where id = any(%s::uuid[])",
+                              (ranked,)).fetchall()) if ranked else {}
+    return [i for i in ranked if (humor.get(i) or 1) <= limit][:n]
 
 
 def generate(conn, user_id: str, article_ids: list[str], selected_article_ids: list[str], minutes: float,
-             mode: str = "presenter", focus: str | None = None, matcher=None, *,
+             mode: str = "presenter", focus: str | None = None, *,
              days: int | None = None, excluded_article_ids: list[str] = ()) -> dict:
     listener = load_listener(conn, user_id)
     n_hosts = 2 if mode == "debate" else 1
@@ -134,7 +121,7 @@ def generate(conn, user_id: str, article_ids: list[str], selected_article_ids: l
                              listener.default_persona_id, listener.chosen_persona_ids)
     moderator = conn.execute("select id::text from public.agent_personas where slug = 'main-host'").fetchone()
     moderator_id = moderator[0] if moderator else None
-    candidates = [i for i in persona_ids if mode != "debate" or i != moderator_id][:MATCHER_CANDIDATES]
+    candidates = [i for i in persona_ids if mode != "debate" or i != moderator_id]
     wpm = _pace(conn, candidates[:n_hosts])
 
     parsed_focus = parse_focus(focus) if focus else None
@@ -158,15 +145,8 @@ def generate(conn, user_id: str, article_ids: list[str], selected_article_ids: l
         kept, _ = fit(group_stories(current, articles, selected, event_hours), minutes, wpm, mode)
 
     final_ids = [i for s in kept for i in s.article_ids]
-    tones: dict[str, str] = {}
-    accepted: set[str] = set()
-    matcher_error = None
-    if final_ids:
-        try:
-            tones, accepted, matcher_error = run_matcher(matcher or _get_matcher(), final_ids, candidates)
-        except Exception as err:  # noqa: BLE001 - e.g. no OPENAI_API_KEY for the matcher
-            matcher_error = str(err) or type(err).__name__
-    hosts = [i for i in candidates if i in accepted][:n_hosts]
+    tones = load_tones(conn, final_ids)
+    hosts = pick_hosts(conn, candidates, tones, n_hosts)
 
     wpm = _pace(conn, hosts or ([moderator_id] if moderator_id else []))
     in_list = set(ids)
@@ -175,7 +155,6 @@ def generate(conn, user_id: str, article_ids: list[str], selected_article_ids: l
         "profile": listener.preferences[:3000] or "Explain what changed and why it matters.",
         "persona_ids": persona_ids,
         "hosts": hosts,
-        "hosts_from_matcher": bool(hosts),
         "tones": tones,
         "segments": [{"article_ids": s.article_ids, "estimated_seconds": round(story_seconds(s, wpm, mode))}
                      for s in kept],
@@ -183,5 +162,5 @@ def generate(conn, user_id: str, article_ids: list[str], selected_article_ids: l
         "requested_minutes": minutes,
         "dropped_article_ids": [i for i in ids if i not in set(final_ids)],
         "added_article_ids": [i for i in final_ids if i not in in_list],
-        "matcher_error": matcher_error,
+        "untoned_article_ids": [i for i in final_ids if i not in tones],
     }
