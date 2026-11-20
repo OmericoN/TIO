@@ -50,11 +50,13 @@ export function NewsWorkspace({ owner, listenerId }: { owner: string; listenerId
   const [picks, setPicks] = useState<Record<string, boolean>>({})
   const [notice, setNotice] = useState('')
   const [question, setQuestion] = useState('')
-  const [submittedQuestion, setSubmittedQuestion] = useState('')
-  const [launch, setLaunch] = useState<{ x: number; y: number; context: AudioContext | null; prepared?: PreparedBriefing } | null>(null)
+  const [search, setSearch] = useState<{ query: string; status: 'loading' | 'done' | 'error'; message?: string } | null>(null)
+  const [launch, setLaunch] = useState<{ x: number; y: number; context: AudioContext | null; prepared?: PreparedBriefing; lineup?: Headline[] } | null>(null)
   const [briefingError, setBriefingError] = useState('')
   const trigger = useRef<HTMLButtonElement>(null)
   const drag = useRef<{ id: number; x: number; y: number } | null>(null)
+  const feed = useRef<Headline[]>([])
+  const searchRequest = useRef<AbortController | null>(null)
   const userId = listenerId || demoListener
   const waitingForCatalog = demo && demoListeners === null
   const selected = Object.keys(picks).filter(id => picks[id]).map(id => stories.find(s => s.id === id)!).filter(Boolean)
@@ -76,6 +78,9 @@ export function NewsWorkspace({ owner, listenerId }: { owner: string; listenerId
     if (waitingForCatalog) return
     const controller = new AbortController()
     setStories([])
+    feed.current = []
+    searchRequest.current?.abort()
+    setSearch(null)
     setPicks({})
     setOnline(false)
     setFeedError('')
@@ -86,6 +91,7 @@ export function NewsWorkspace({ owner, listenerId }: { owner: string; listenerId
           const recommendations = await requestJson<{ article_ids: string[] }>('/api/recommend', signal, { user_id: userId })
           const headlines = await lookupHeadlines(recommendations.article_ids, signal)
           if (controller.signal.aborted) return
+          feed.current = headlines
           setStories(headlines)
           setSample(false)
           setRecorded(false)
@@ -94,7 +100,8 @@ export function NewsWorkspace({ owner, listenerId }: { owner: string; listenerId
             AbortSignal.any([controller.signal, AbortSignal.timeout(5000)]))
           if (controller.signal.aborted) return
           if (!Array.isArray(catalog.stories)) throw new Error('The story catalog is unavailable.')
-          setStories(catalog.sample ? sampleHeadlines : catalog.stories)
+          feed.current = catalog.sample ? sampleHeadlines : catalog.stories
+          setStories(feed.current)
           setSample(catalog.sample)
           setRecorded(catalog.sample && (savedSettings?.recorded ?? true))
         }
@@ -104,6 +111,7 @@ export function NewsWorkspace({ owner, listenerId }: { owner: string; listenerId
         if (userId) {
           setFeedError(error instanceof Error ? error.message : 'Recommendations could not be loaded.')
         } else {
+          feed.current = sampleHeadlines
           setStories(sampleHeadlines)
           setSample(true)
           setRecorded(true)
@@ -129,6 +137,49 @@ export function NewsWorkspace({ owner, listenerId }: { owner: string; listenerId
     }
   }, [demo])
 
+  // Keep the headlines already in the lineup visible, so a search never drops a pick.
+  function showWithPicks(results: Headline[]) {
+    setStories(current => {
+      const ids = new Set(results.map(story => story.id))
+      return [...current.filter(story => picks[story.id] && !ids.has(story.id)), ...results]
+    })
+  }
+
+  async function runSearch(query: string) {
+    searchRequest.current?.abort()
+    const controller = new AbortController()
+    searchRequest.current = controller
+    setSearch({ query, status: 'loading' })
+    try {
+      let results: Headline[]
+      if (userId) {
+        const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(90_000)])
+        const found = await requestJson<{ article_ids: string[] }>('/api/recommend', signal,
+          { user_id: userId, focus: query, limit: 30 })
+        results = await lookupHeadlines(found.article_ids, signal)
+      } else {
+        const words = query.toLowerCase().split(/\s+/).filter(Boolean)
+        results = feed.current.filter(story => {
+          const text = `${story.title} ${story.topic} ${story.summary}`.toLowerCase()
+          return words.every(word => text.includes(word))
+        })
+      }
+      if (controller.signal.aborted) return
+      showWithPicks(results)
+      setSearch({ query, status: 'done',
+        message: results.length ? `${results.length} ${results.length === 1 ? 'article' : 'articles'} found` : 'No articles match this search.' })
+    } catch (error) {
+      if (controller.signal.aborted) return
+      setSearch({ query, status: 'error', message: error instanceof Error ? error.message : 'Search is unavailable.' })
+    }
+  }
+
+  function clearSearch() {
+    searchRequest.current?.abort()
+    setSearch(null)
+    showWithPicks(feed.current)
+  }
+
   function choose(story: Headline, include: boolean) {
     if (include && !picks[story.id] && selected.length >= 6) {
       setNotice('Your lineup holds six headlines. Remove one before adding another.')
@@ -140,12 +191,20 @@ export function NewsWorkspace({ owner, listenerId }: { owner: string; listenerId
 
   async function start() {
     if (preparing) return
-    if (!selected.length || (!recorded && ((!userId && !preferences.profile.trim()) || !Number.isInteger(preferences.minutes) || preferences.minutes < 1 || preferences.minutes > 15))) {
-      setView(selected.length ? 'profile' : 'feed')
-      setNotice(selected.length ? 'Check the listener profile and briefing length.' : 'Choose at least one headline to start your briefing.')
-      requestAnimationFrame(() => (selected.length ? document.querySelector<HTMLTextAreaElement>('.profile-settings textarea')?.focus() : document.getElementById('stories-title')?.scrollIntoView({ block: 'center' })))
+    if (!stories.length) {
+      setNotice(feedError ? 'The feed could not load, so there are no articles to discuss yet.' : 'The feed is still loading. Try again in a moment.')
       return
     }
+    if (!recorded && ((!userId && !preferences.profile.trim()) || !Number.isInteger(preferences.minutes) || preferences.minutes < 1 || preferences.minutes > 15)) {
+      setView('profile')
+      setNotice('Check the listener profile and briefing length.')
+      requestAnimationFrame(() => document.querySelector<HTMLTextAreaElement>('.profile-settings textarea')?.focus())
+      return
+    }
+    // With no picks, the briefing fills itself: a listener's plan adds recommended articles up to the chosen length,
+    // and the standard feed takes its top stories, one story per two minutes like the panel does.
+    const lineup = selected.length ? selected
+      : stories.slice(0, Math.min(6, Math.max(1, Math.floor(preferences.minutes / 2))))
     const rect = trigger.current!.getBoundingClientRect()
     const origin = { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2, context: null }
     setBriefingError('')
@@ -179,7 +238,7 @@ export function NewsWorkspace({ owner, listenerId }: { owner: string; listenerId
     }
     let context = null
     try { context = new AudioContext(); void context.resume().catch(() => {}) } catch { /* Native playback still works. */ }
-    setLaunch({ ...origin, context })
+    setLaunch({ ...origin, context, lineup })
   }
 
   return <div className="workspace">
@@ -189,17 +248,17 @@ export function NewsWorkspace({ owner, listenerId }: { owner: string; listenerId
       <div className="masthead-inner"><div className="brand-lockup"><Brand /><span className="publication">The Liquid Briefing</span></div></div>
     </header>
     {view === 'feed' && <div className="search-rail">
-      <form className="article-search" role="search" aria-label="Article search preview" onSubmit={event => {
+      <form className="article-search" role="search" aria-label="Article search" onSubmit={event => {
         event.preventDefault()
-        if (!question.trim()) return
-        setSubmittedQuestion(question.trim())
-        setQuestion('')
+        const query = question.trim()
+        if (query.length < 2 || preparing) return
+        void runSearch(query)
         window.scrollTo(0, 0)
       }}>
         <Icon name="search" />
-        <label htmlFor="article-question" className="sr-only">Ask about the articles</label>
+        <label htmlFor="article-question" className="sr-only">Search the articles</label>
         <input id="article-question" type="search" enterKeyHint="search" placeholder="Search the news…" value={question} maxLength={500} onChange={event => setQuestion(event.target.value)} />
-        <button type="submit" aria-label="Ask" disabled={!question.trim()}><Icon name="arrow" /></button>
+        <button type="submit" aria-label="Search" disabled={question.trim().length < 2 || preparing}><Icon name="arrow" /></button>
       </form>
     </div>}
     <div className="workspace-dock">
@@ -222,7 +281,10 @@ export function NewsWorkspace({ owner, listenerId }: { owner: string; listenerId
           return 'Preferences saved on this device.'
         } catch { return 'Applied for this visit. Your browser could not save these preferences.' }
       }} /> : view === 'briefings' ? <Briefings key={historyVersion} owner={owner} /> : <>
-        {submittedQuestion && <div role="status" className="search-result"><strong>{submittedQuestion}</strong><p>Article search is a preview. It hasn’t searched the dataset.</p></div>}
+        {search && <div role="status" className="search-result"><strong>{search.query}</strong>
+          <p>{search.status === 'loading' ? 'Searching the articles…' : search.message}</p>
+          <button type="button" className="search-clear" onClick={() => { clearSearch(); setQuestion('') }}>Clear search</button>
+        </div>}
         <h1 className="sr-only">News feed</h1>
         {demoListeners && demoListeners.length > 0 && <div className="field max-w-md">
           <label htmlFor="demo-listener">Listener</label>
@@ -238,9 +300,9 @@ export function NewsWorkspace({ owner, listenerId }: { owner: string; listenerId
           </select>
         </div>}
         {preparing && <p role="status">Generating your briefing…</p>}
-        <span role="status" className={notice.startsWith('Your lineup') || notice.startsWith('Choose') || notice.startsWith('Check') ? 'selection-notice' : 'sr-only'}>{notice}</span>
+        <span role="status" className={notice.startsWith('Your lineup') || notice.startsWith('The feed') || notice.startsWith('Check') ? 'selection-notice' : 'sr-only'}>{notice}</span>
         <section aria-labelledby="stories-title">
-          <div className="section-title"><h2 id="stories-title">{userId ? 'Recommended articles' : 'Top articles'}</h2></div>
+          <div className="section-title"><h2 id="stories-title">{search ? 'Search results' : userId ? 'Recommended articles' : 'Top articles'}</h2></div>
           {feedError && <p role="alert">{feedError}</p>}
           <ul className="story-grid selectable-stories">{stories.map(story => <li key={story.id}>
             <article data-choice={picks[story.id] === undefined ? undefined : picks[story.id] ? 'include' : 'skip'}
@@ -281,7 +343,7 @@ export function NewsWorkspace({ owner, listenerId }: { owner: string; listenerId
       </>}
     </section>
     {launch && <Suspense fallback={<p className="session-loading" role="status">Opening briefing…</p>}><PanelPlayer owner={owner}
-      stories={launch.prepared?.stories ?? selected}
+      stories={launch.prepared?.stories ?? launch.lineup ?? selected}
       preferences={launch.prepared?.preferences ?? { ...preferences, profile: preferences.profile.trim() || defaultProfile }}
       plan={launch.prepared?.plan} recorded={!launch.prepared && recorded} origin={launch} onClose={() => {
       if (launch.context && launch.context.state !== 'closed') void launch.context.close().catch(() => {})

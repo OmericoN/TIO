@@ -146,6 +146,7 @@ a { text-underline-offset: .2em; }
 .story-summary { margin-top: 8px; }
 .search-result, .playing-segment { overflow-wrap: anywhere; }
 .search-result { margin-top: 12px; }
+.search-clear { margin-top: 4px; padding: 0; border: 0; background: none; color: var(--ink, inherit); font: inherit; font-size: 14px; text-decoration: underline; cursor: pointer; }
 .skip-link { position: absolute; top: 5px; left: 5px; padding: 10px; background: var(--paper); z-index: 6; transform: translateY(-150%); }
 .skip-link:focus { transform: translateY(0); }
 .setup-fields { display: grid; grid-template-columns: minmax(0, 1.7fr) minmax(230px, 1fr); gap: 24px; margin: 24px 0 18px; }
