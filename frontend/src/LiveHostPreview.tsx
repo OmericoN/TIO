@@ -25,7 +25,11 @@ function LiveHostControls() {
         token: string
         system_prompt: string
       }
-      startSession({
+      if (!token || !prompt) {
+        setError('FastAPI returned an incomplete voice session.')
+        return
+      }
+      await startSession({
         conversationToken: token,
         connectionType: 'webrtc',
         overrides: { agent: { prompt: { prompt } } },

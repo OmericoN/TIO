@@ -1,14 +1,16 @@
 import { useEffect, useRef, useState } from 'react'
 import type { FormEvent } from 'react'
 import { createRoot } from 'react-dom/client'
+import { NewsWorkspace } from './NewsWorkspace'
 import './styles.css'
 
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL?.trim().replace(/\/+$/, '')
 const publishableKey = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY?.trim()
 const configured = Boolean(supabaseUrl && publishableKey?.startsWith('sb_publishable_'))
 
-const termsUrl = import.meta.env.VITE_TERMS_URL?.trim()
-const termsAvailable = Boolean(termsUrl?.startsWith('https://'))
+const externalTermsUrl = import.meta.env.VITE_TERMS_URL?.trim()
+const bundledTermsPath = '/terms-v1.html'
+const termsUrl = externalTermsUrl?.startsWith('https://') ? externalTermsUrl : bundledTermsPath
 const fieldClass = 'mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2'
 const interestOptions = [
   'Stock markets', 'Technology', 'Central banks and inflation',
@@ -103,19 +105,13 @@ function OnboardingFields({ step }: { step: number }) {
 
 function TermsAgreement() {
   return (
-    <>
     <label className="flex items-start gap-2 border-t border-slate-200 pt-4 text-sm">
       <input type="checkbox" name="accept_terms" required className="mt-1" />
       <span>
         I agree to the{' '}
-        {termsAvailable
-          ? <a href={termsUrl} target="_blank" rel="noreferrer" className="underline">Terms and Conditions</a>
-          : 'Terms and Conditions'}
-        .
+        <a href={termsUrl} target="_blank" rel="noreferrer" className="underline">Terms and Conditions</a>.
       </span>
     </label>
-    {!termsAvailable && <p className="text-sm text-slate-600">Account registration is unavailable until the terms are published.</p>}
-    </>
   )
 }
 
@@ -124,6 +120,7 @@ function App() {
   const [pending, setPending] = useState(false)
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
+  const [signInEmail, setSignInEmail] = useState('')
   const [creatingAccount, setCreatingAccount] = useState(false)
   const [step, setStep] = useState(0)
   const dialogRef = useRef<HTMLElement>(null)
@@ -199,17 +196,16 @@ function App() {
       return
     }
 
-    if (!configured) return
+    if (!configured) {
+      setError('Supabase sign-in is not configured.')
+      return
+    }
     if (creatingAccount && Array.from(password).length < 8) {
       setError('Use at least 8 characters for your password.')
       return
     }
     if (creatingAccount && password !== form.get('password_confirmation')) {
       setError('The passwords do not match.')
-      return
-    }
-    if (creatingAccount && (!termsAvailable || !form.has('accept_terms'))) {
-      setError('Accept the Terms and Conditions to create an account.')
       return
     }
 
@@ -246,9 +242,10 @@ function App() {
       if (!response.ok) {
         const failure = await response.json().catch(() => null)
         if (creatingAccount && ['user_already_exists', 'email_exists'].includes(failure?.error_code)) {
-          formElement.reset()
+          setSignInEmail(email)
+          setCreatingAccount(false)
           setStep(0)
-          setNotice('If the address can be registered, check your inbox for a confirmation link.')
+          setNotice('An account already exists for this email. Sign in below.')
         } else if (failure?.error_code === 'weak_password') {
           setError('Choose a stronger password that meets the project’s password requirements.')
         } else if (failure?.error_code === 'invalid_credentials') {
@@ -265,9 +262,10 @@ function App() {
 
       const session = await response.json()
       if (creatingAccount && !session?.access_token) {
-        formElement.reset()
+        setSignInEmail(email)
+        setCreatingAccount(false)
         setStep(0)
-        setNotice('If the address can be registered, check your inbox for a confirmation link.')
+        setNotice('If you just registered, check your inbox for a confirmation link before signing in.')
         return
       }
       if (typeof session?.access_token !== 'string' || !session.access_token) {
@@ -284,7 +282,9 @@ function App() {
 
   return (
     <>
-      <main className="min-h-dvh bg-slate-50" inert={!signedIn} />
+      <main className="min-h-dvh bg-slate-50" inert={!signedIn}>
+        {signedIn && <NewsWorkspace />}
+      </main>
       {!signedIn && (
         <div className="fixed inset-0 grid justify-items-center overflow-y-auto bg-slate-950/30 p-4">
           <section
@@ -305,6 +305,7 @@ function App() {
                   <input
                     type="email"
                     name="email"
+                    defaultValue={creatingAccount ? undefined : signInEmail}
                     autoComplete="username"
                     required
                     className="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2"
@@ -344,7 +345,7 @@ function App() {
               {error && <p role="alert" className="text-sm text-red-700">{error}</p>}
               <button
                 type="submit"
-                disabled={pending || ((!creatingAccount || step === 2) && (!configured || (creatingAccount && !termsAvailable)))}
+                disabled={pending}
                 className="w-full rounded-lg bg-slate-900 px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-50"
               >
                 {pending ? 'Please wait…' : creatingAccount && step < 2 ? 'Continue' : action}
