@@ -6,7 +6,7 @@ from urllib.error import URLError
 
 from fastapi import HTTPException, Request, Response
 
-from api.voice import create_voice_session
+from api.voice import PREVIEW_PROMPT, create_voice_session
 from main import app
 
 
@@ -24,7 +24,10 @@ class VoiceSessionTest(unittest.TestCase):
 
         session = create_voice_session(self.request(), response)
 
-        self.assertEqual(session.model_dump(), provider_session)
+        self.assertEqual(session.model_dump(), {
+            **provider_session,
+            "system_prompt": PREVIEW_PROMPT.read_text(encoding="utf-8").strip(),
+        })
         self.assertEqual(response.headers["cache-control"], "no-store")
         upstream_request = urlopen.call_args.args[0]
         self.assertEqual(

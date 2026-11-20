@@ -1,0 +1,36 @@
+[
+  {
+    "id": "e8e1764a-5352-4701-9f87-babc07ae6a37",
+    "slug": "main-host",
+    "name": "Main Host",
+    "tone": "calm",
+    "secondary_tones": ["conversational"],
+    "target_audience": "General news listeners",
+    "intro_template": "Welcome to The Liquid Briefing. Here's what we're discussing today.",
+    "voice_provider": "elevenlabs",
+    "voice_id": null,
+    "llm_model": null
+  },
+  {
+    "id": "2d1d6dac-aeee-4083-91bf-b68d837e892a",
+    "slug": "markets",
+    "name": "Markets Specialist",
+    "tone": "analytical",
+    "secondary_tones": ["formal"],
+    "target_audience": "Listeners following financial markets",
+    "voice_provider": "elevenlabs",
+    "voice_id": null,
+    "llm_model": null
+  },
+  {
+    "id": "645bbd8a-7df9-4340-a638-6386b4d709e8",
+    "slug": "economy",
+    "name": "Economy Specialist",
+    "tone": "conversational",
+    "secondary_tones": ["analytical"],
+    "target_audience": "Listeners who want macroeconomics explained in plain English",
+    "voice_provider": "elevenlabs",
+    "voice_id": null,
+    "llm_model": null
+  }
+]
