@@ -1,34 +1,24 @@
 flowchart TD
-    subgraph VOICE["Live conversation continues while research runs"]
-        PERSON["Listener"] -->|Speak or interrupt| PLAYER["React player: pause and resume at the saved position"]
-        PLAYER -->|WebRTC microphone and story context| LIVE["ElevenAgents Realtime Mini: clarify and give progress while evidence is pending"]
-        LIVE -->|Live conversational audio| PLAYER
-        PLAYER -->|One audible stream and synced source cards| PERSON
-    end
+    PERSON["Listener"] -->|Speak or interrupt| PLAYER["React discussion player"]
+    PLAYER -->|Microphone audio| STT["ElevenLabs Scribe v3 Live"]
+    PLAYER -->|Listener starts speaking| SCHEDULE["FastAPI selects the next speaker and tracks interruptions"]
+    STT -->|Committed listener turn| HISTORY
 
-    LIVE -->|Async research webhook| API["FastAPI: enqueue research and track the current question"]
-    PLAYER -->|Active story and session context| API
-    API -->|Job status and errors over SSE| PLAYER
-    PLAYER -->|Non-interrupting status update| LIVE
+    PROFILE["Active headline and listener preferences"] --> RECOMMENDER["Recommender ranks eligible personas using embeddings"]
+    CATALOG["Persona catalog with expertise, prompts, model settings and voice IDs"] --> RECOMMENDER
+    RECOMMENDER -->|Ranked host IDs| SCHEDULE
+    HISTORY["Ordered listener and host turns"] --> SCHEDULE
 
-    subgraph RESEARCH["Background research and verification"]
-        LOOKUP["Retrieve a small set of relevant original passages"]
-        LOOKUP --> DRAFT["Lower-cost text LLM drafts claims with article IDs and quotes"]
-        DRAFT --> VERIFY["Check quotes, figures and claim meaning; flag source conflicts"]
-        RELEASES["Relevant official releases"] --> VERIFY
-        VERIFY -->|Approved wording and claim citations| CURRENT{"Is this still the current request?"}
-    end
-
-    SOURCES["Multilingual news articles"] --> INDEX["Batch deduplicate, group and index evidence"]
-    INDEX --> LOOKUP
-    API -->|Question and active story ID| LOOKUP
-    LOOKUP -->|Insufficient evidence| API
-    VERIFY -->|No supported answer remains| API
-    CURRENT -->|Superseded| DISCARD["Discard stale result"]
-    CURRENT -->|Current| RENDER["Reuse cached audio or use ElevenLabs TTS on approved text"]
-    RENDER -->|If still current, play clip with source cards| PLAYER
-    PROFILE["Listener profile and format"] --> RANK["Rank and select stories for the listener"]
-    INDEX --> RANK
-    RANK --> DRAFT
-    RENDER -->|Cache verified briefing clips| BRIEFING["Pre-rendered briefing clips"]
-    BRIEFING --> PLAYER
+    SCHEDULE -->|Chosen host and turn to answer| LOOKUP["Retrieve a bounded set of original passages"]
+    INDEX["Shared article and official release index"] --> LOOKUP
+    LOOKUP --> HOST["Call the chosen host model with its persona and recent turns"]
+    HOST -->|Host turn with claim citations| VERIFY["Verify quotes and figures against original sources"]
+    VERIFY -->|Approved turn with citations| CURRENT{"Is the turn still current?"}
+    VERIFY -->|Insufficient support| STATUS["Show that the sources could not answer"]
+    STATUS --> PLAYER
+    CURRENT -->|Superseded| DROP["Discard stale turn"]
+    CURRENT -->|Current| TTS["Render or reuse audio in the selected host's ElevenLabs voice"]
+    TTS -->|If still current, play the turn with its sources| PLAYER
+    PLAYER -->|Turn finished| HISTORY
+    PLAYER -->|Audio and source cards| PERSON
+    HISTORY -->|Queue a host reply if the listener has not interrupted| SCHEDULE
