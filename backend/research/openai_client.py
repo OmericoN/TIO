@@ -1,0 +1,66 @@
+import json
+import logging
+from http.client import HTTPException
+from typing import TypeVar
+from urllib.request import Request, urlopen
+
+from pydantic import BaseModel
+
+
+logger = logging.getLogger(__name__)
+OutputModel = TypeVar("OutputModel", bound=BaseModel)
+
+
+class MatchProcessingError(RuntimeError):
+    """The provider failed or returned an unusable editorial decision."""
+
+
+class OpenAIClient:
+    def __init__(self, api_key: str, model: str = "gpt-5-mini"):
+        if not api_key.strip():
+            raise RuntimeError("Set OPENAI_API_KEY in the environment or repository root .env.")
+        self.api_key = api_key
+        self.model = model
+
+    def generate(
+        self, stage: str, instructions: str, data: dict, output_type: type[OutputModel]
+    ) -> OutputModel:
+        payload = {
+            "model": self.model,
+            "store": False,
+            "messages": [
+                {"role": "developer", "content": instructions},
+                {"role": "user", "content": json.dumps(data, ensure_ascii=False)},
+            ],
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": stage,
+                    "strict": True,
+                    "schema": output_type.model_json_schema(),
+                },
+            },
+        }
+        request = Request(
+            "https://api.openai.com/v1/chat/completions",
+            data=json.dumps(payload).encode(),
+            headers={"Content-Type": "application/json"},
+        )
+        request.add_unredirected_header("Authorization", f"Bearer {self.api_key}")
+        try:
+            with urlopen(request, timeout=90) as response:
+                result = json.load(response)
+            usage = result["usage"]
+            logger.info(
+                "persona_match stage=%s model=%s input_tokens=%d cached_input_tokens=%d output_tokens=%d",
+                stage, self.model, usage["prompt_tokens"],
+                (usage.get("prompt_tokens_details") or {}).get("cached_tokens", 0),
+                usage["completion_tokens"],
+            )
+            choice = result["choices"][0]
+            message = choice["message"]
+            if choice["finish_reason"] != "stop" or message.get("refusal"):
+                raise MatchProcessingError(f"OpenAI did not complete {stage}.")
+            return output_type.model_validate_json(message["content"], strict=True)
+        except (OSError, HTTPException, ValueError, KeyError, IndexError, TypeError, AttributeError) as exc:
+            raise MatchProcessingError(f"OpenAI could not process {stage}.") from exc
