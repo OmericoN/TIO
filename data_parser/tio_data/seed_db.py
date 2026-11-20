@@ -23,47 +23,47 @@ SEED_DIR = PROJECT_DIR / "seed"
 # Host casting per listener, chosen from agent_personas. `default` voices most briefings, `debate` is the
 # second voice in two-host mode (a contrasting view), and `alternates` cover topics the default is weaker on.
 CASTING = {
-    # Portfolio analyst, rates and macro: wants figures scrutinised; the debate adds a downside view.
-    "sanne.devries@example.com": dict(default="spreadsheet-sherlock", debate="doomsday-economist",
-                                      alternates=["old-school-banker", "doomsday-economist"]),
-    # Software engineer into AI and chips: tech optimist, checked by a numbers detective.
-    "lukas.schneider@example.com": dict(default="techno-utopian", debate="spreadsheet-sherlock",
-                                        alternates=["startup-hustler", "market-maximalist"]),
-    # Crypto trader, risk 5, 5-minute briefings: crypto voice, with an economist to keep risk in view.
-    "priya.raman@example.com": dict(default="crypto-prophet", debate="doomsday-economist",
-                                    alternates=["market-maximalist", "doomsday-economist"]),
+    # Portfolio analyst: check the figures and add the policy outlook.
+    "sanne.devries@example.com": dict(default="numbers-desk", debate="rates-and-fx",
+                                      alternates=["funds-and-etfs", "rates-and-fx"]),
+    # Software engineer: pair the chip industry reporter with the numbers desk.
+    "lukas.schneider@example.com": dict(default="ai-and-chip-industry", debate="numbers-desk",
+                                        alternates=["curious-explainer", "earnings-and-equities"]),
+    # Crypto trader: pair digital asset coverage with the rates and currency context.
+    "priya.raman@example.com": dict(default="digital-assets", debate="rates-and-fx",
+                                    alternates=["glasgow-scoreboard", "rates-and-fx"]),
     # Healthcare consultant, cautious: drug approvals and regulation need careful qualification.
-    "daniel.okafor@example.com": dict(default="legal-footnote", debate="paranoid-cfo",
-                                      alternates=["paranoid-cfo", "minimalist-monk"]),
-    # Retail CFO: margins first; the debate brings the shop-floor view; luxury host for retail brands.
-    "emma.bakker@example.com": dict(default="paranoid-cfo", debate="skeptical-unionist",
-                                    alternates=["luxury-snob", "earnest-motivator"]),
-    # M&A associate: precise earnings readouts, takeover drama, and the legal side of deals.
-    "jonas.weber@example.com": dict(default="cfo-robot", debate="legal-footnote",
-                                    alternates=["tabloid-magnate", "legal-footnote"]),
+    "daniel.okafor@example.com": dict(default="on-the-record", debate="earnings-and-equities",
+                                      alternates=["earnings-and-equities", "rolling-news-desk"]),
+    # Retail CFO: cover margins and add the view from the workplace.
+    "emma.bakker@example.com": dict(default="earnings-and-equities", debate="workplace-brief",
+                                    alternates=["after-work-anchor", "quick-morning-desk"]),
+    # M&A associate: distinguish company results from the legal status of deals.
+    "jonas.weber@example.com": dict(default="earnings-and-equities", debate="on-the-record",
+                                    alternates=["numbers-desk", "on-the-record"]),
     # Retired teacher, risk 1, pensions: plain household language and a patient lecturer.
-    "maria.lopez@example.com": dict(default="grandma-ledger", debate="academic-lecturer",
-                                    alternates=["academic-lecturer", "minimalist-monk"]),
+    "maria.lopez@example.com": dict(default="everyday-economy", debate="curious-explainer",
+                                    alternates=["curious-explainer", "funds-and-etfs"]),
     # Logistics planner, industry, commodities, trade: trade strategy plus resource and worker angles.
-    "tom.jansen@example.com": dict(default="geopolitical-chessmaster", debate="climate-ledger",
-                                   alternates=["climate-ledger", "skeptical-unionist"]),
+    "tom.jansen@example.com": dict(default="policy-and-business", debate="energy-and-commodities",
+                                   alternates=["energy-and-commodities", "workplace-brief"]),
     # Journalist, world news and AI: strategic overview, an evidence-checking sceptic, a tech voice.
-    "aisha.haddad@example.com": dict(default="geopolitical-chessmaster", debate="conspiracy-curious",
-                                     alternates=["techno-utopian", "academic-lecturer"]),
+    "aisha.haddad@example.com": dict(default="policy-and-business", debate="yorkshire-reality-check",
+                                     alternates=["ai-and-chip-industry", "curious-explainer"]),
     # Private banker, risk 4, client talking points: formal banker against market energy; punchy hooks.
-    "kevin.muller@example.com": dict(default="old-school-banker", debate="market-maximalist",
-                                     alternates=["market-maximalist", "influencer-ceo"]),
+    "kevin.muller@example.com": dict(default="funds-and-etfs", debate="glasgow-scoreboard",
+                                     alternates=["glasgow-scoreboard", "brooklyn-copy-desk"]),
 }
 
 # When a briefing uses an alternate host, prefer the one whose beat matches the article's topic.
 TOPIC_HOST = {
-    "CRYPTOC": "crypto-prophet", "AI": "techno-utopian", "TECHNOLO": "techno-utopian",
-    "MERGERAC": "tabloid-magnate", "HC": "legal-footnote", "MEDCN": "legal-footnote",
-    "RETAIL99": "luxury-snob", "MARKCOMM": "climate-ledger", "INDUSGDS": "climate-ledger",
-    "WORLDNEW": "geopolitical-chessmaster", "NATIONAL": "geopolitical-chessmaster",
-    "MARKECON": "doomsday-economist", "INTRSTRA": "doomsday-economist",
-    "INVESTOP": "market-maximalist", "TJ": "market-maximalist", "EARNINGS": "cfo-robot",
-    "MUTUALFD": "old-school-banker", "ASSMNGMT": "old-school-banker",
+    "CRYPTOC": "digital-assets", "AI": "ai-and-chip-industry", "TECHNOLO": "ai-and-chip-industry",
+    "MERGERAC": "on-the-record", "HC": "on-the-record", "MEDCN": "on-the-record",
+    "RETAIL99": "workplace-brief", "MARKCOMM": "energy-and-commodities", "INDUSGDS": "energy-and-commodities",
+    "WORLDNEW": "policy-and-business", "NATIONAL": "policy-and-business",
+    "MARKECON": "rates-and-fx", "INTRSTRA": "rates-and-fx",
+    "INVESTOP": "glasgow-scoreboard", "TJ": "glasgow-scoreboard", "EARNINGS": "earnings-and-equities",
+    "MUTUALFD": "funds-and-etfs", "ASSMNGMT": "funds-and-etfs",
 }
 
 
