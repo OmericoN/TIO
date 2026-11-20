@@ -99,6 +99,20 @@ class PanelTest(unittest.TestCase):
         self.assertIsNone(spoken_claim("margins improved sharply this year", text))
         self.assertEqual(spoken_claim("Net sales rose", text), "Net sales rose")
 
+    def test_paraphrased_claim_spread_over_sentences_is_located(self):
+        text = ("I’m Tio. The real news is Trump’s Manila arrival for the 49th ASEAN Summit. IBTimes UK says he "
+                "arrived on Tuesday, 17 November 2026, and that Air Force One landed at 5.33 pm local time. "
+                "Leila Grant, what stands out?")
+        arrival = spoken_claim("Trump’s arrival in Manila on Tuesday, 17 November 2026, for the final day of the "
+                               "49th ASEAN Summit is the main development.", text)
+        self.assertIn("49th ASEAN", arrival)
+        self.assertIn("17 November 2026", arrival)
+        self.assertNotIn("Leila", arrival)
+        landing = spoken_claim("Air Force One landed at Ninoy Aquino International Airport in Pasay City at "
+                               "5.33 pm local time.", text)
+        self.assertIn("5.33 pm", landing)
+        self.assertIsNone(spoken_claim("Air Force One landed at 6.10 pm local time.", text))
+
     def test_repair_once_and_withhold_unsupported_interpretation(self):
         panel = fixture()
         author, verifier = Mock(), Mock()

@@ -11,6 +11,8 @@ from uuid import UUID
 from discussion.agents import DiscussionLine, SourceExcerpt, TurnContext, prepare_agent_turn
 from discussion.personas import AgentPersona
 from discussion.stories import Story
+from pydantic import Field
+
 from research.matcher import StructuredOutput
 from research.openai_client import OpenAIClient
 
@@ -23,7 +25,7 @@ class Citation(StructuredOutput):
 
 
 class SpokenCitation(Citation):
-    claim: str
+    claim: str = Field(description="Words copied verbatim from this turn's text, not from the source quote.")
 
 
 class Turn(StructuredOutput):
@@ -96,22 +98,31 @@ def numbers(text):
     return set(re.findall(r"\d+(?:\.\d+)*", text.replace(",", ".")))
 
 
+FILLER = {"the", "and", "for", "that", "this", "with", "from", "was", "were", "are", "has", "had", "have", "its",
+          "his", "her", "their", "said", "says", "say", "who", "what", "which", "but", "not", "than", "into", "about"}
+
+
+def content_words(text):
+    return {w for w in re.findall(r"\w+", text.casefold()) if (len(w) > 2 or w.isdigit()) and w not in FILLER}
+
+
 def spoken_claim(claim, text):
-    """Where a citation's claim sits in the spoken line. The model often rewords its own claim field slightly
-    ("20 cents per share" vs "20 cents a share"), so if there is no exact match take the sentence that shares most of
-    the claim's words and all of its numbers. None when no sentence clearly carries the claim."""
+    """Where a citation's claim sits in the spoken line. The model often writes the claim field as a paraphrase of
+    its source ("20 cents per share" for "20 cents a share", or adds the airport's full name), sometimes spread
+    over two sentences. Without an exact match, take the sentences that share its words or figures, provided
+    together they carry all of the claim's numbers and at least half its content words. None otherwise."""
     exact = source_quote(claim, [text])
     if exact is not None:
         return exact
-    words = set(re.findall(r"\w+", claim.casefold()))
+    words, figures = content_words(claim), numbers(claim)
     if len(words) < 3:
         return None
-    best, share = None, 0.0
-    for sentence in re.split(r"(?<=[.!?:;])\s+", text):
-        overlap = len(words & set(re.findall(r"\w+", sentence.casefold()))) / len(words)
-        if overlap > share and numbers(claim) <= numbers(sentence):
-            best, share = sentence.strip(), overlap
-    return best if share >= 0.6 else None
+    chosen = [s.strip() for s in re.split(r"(?<=[.!?;])\s+", text)
+              if len(words & content_words(s)) >= 2 or figures & numbers(s)]
+    joined = " ".join(chosen)
+    if chosen and figures <= numbers(joined) and len(words & content_words(joined)) >= 0.5 * len(words):
+        return joined
+    return None
 
 
 def finding_problem(finding, originals):
@@ -273,7 +284,8 @@ the next expert. In answer mode the moderator may refer the listener's question 
 A closing summarizes common ground and attributes unresolved differences. Compare periods, units,
 scope, timing and estimates. Never invent consensus or investment advice. Cite exact original passages
 for every factual premise. Copy the corresponding words from the spoken text into each citation's
-claim field. Nonfactual introductions can have empty citations. Do not invent facts about
+claim field: the claim is the speaker's own words exactly as they appear in text, never the source's
+wording. Nonfactual introductions can have empty citations. Do not invent facts about
 the panel. Listener questions and prior statements are not evidence."""
         for attempt in range(2):
             turn = client.generate("panel_turn", instructions, data, Turn)
