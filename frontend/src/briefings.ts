@@ -1,7 +1,7 @@
 import fixtures from '../../backend/discussion/sample.json'
 import script from './recorded.json'
 
-export type Headline = { id: string; title: string; topic: string; summary: string; image?: string }
+export type Headline = { id: string; title: string; topic: string; summary: string; thumb_url?: string | null }
 export type Card = { id: string; publisher: string; language: string; url: string | null; quote: string; claim: string }
 export type Segment = { id: string; story: string; speaker: string; host: string; guests: string[]; text: string; sources: Card[]; audio?: string; audioUrl?: string }
 export type Entry = Segment | { id: string; speaker: 'Listener'; text: string }
@@ -15,7 +15,6 @@ export function sampleArticle(id: string) {
 export const sampleHeadlines: Headline[] = fixtures.map(s => ({
   id: s.id, title: s.headline, summary: s.articles[0].body,
   topic: s.id === 'sample-rates' ? 'Monetary policy' : 'Company earnings',
-  image: s.id === 'sample-rates' ? 'economy' : 'finance',
 }))
 
 const claims: Record<string, [number, string][]> = {

@@ -2,6 +2,7 @@ import { lazy, Suspense, useEffect, useRef, useState } from 'react'
 import { AudioRibbon, Brand, Icon } from './Brand'
 import { Briefings } from './BriefingHistory'
 import { Orb } from './Orb'
+import { loadSettings, Profile } from './Profile'
 import { sampleHeadlines } from './briefings'
 import type { Headline, Preferences } from './briefings'
 
@@ -10,13 +11,14 @@ const PanelPlayer = lazy(loadPlayer)
 const defaultProfile = 'Explain what changed and why it matters to a general news listener.'
 
 export function NewsWorkspace({ owner }: { owner: string }) {
-  const [view, setView] = useState<'feed' | 'briefings'>('feed')
+  const [view, setView] = useState<'feed' | 'briefings' | 'profile'>('feed')
   const [stories, setStories] = useState<Headline[]>([])
   const [sample, setSample] = useState(true)
   const [historyVersion, setHistoryVersion] = useState(0)
   const [online, setOnline] = useState(false)
-  const [recorded, setRecorded] = useState(true)
-  const [preferences, setPreferences] = useState<Preferences>({ profile: defaultProfile, mode: 'panel', minutes: 4 })
+  const [savedSettings] = useState(() => loadSettings(owner))
+  const [recorded, setRecorded] = useState(savedSettings?.recorded ?? true)
+  const [preferences, setPreferences] = useState<Preferences>(savedSettings?.preferences ?? { profile: defaultProfile, mode: 'panel', minutes: 4 })
   const [picks, setPicks] = useState<Record<string, boolean>>({})
   const [notice, setNotice] = useState('')
   const [question, setQuestion] = useState('')
@@ -37,9 +39,9 @@ export function NewsWorkspace({ owner }: { owner: string }) {
         if (!mounted) return
         setStories(catalog.sample ? sampleHeadlines : catalog.stories)
         setSample(catalog.sample)
-        setRecorded(catalog.sample)
+        setRecorded(catalog.sample && (savedSettings?.recorded ?? true))
         setOnline(true)
-      } catch { if (mounted) setStories(sampleHeadlines) }
+      } catch { if (mounted) { setStories(sampleHeadlines); setRecorded(true) } }
     }
     void load()
     return () => { mounted = false }
@@ -56,9 +58,9 @@ export function NewsWorkspace({ owner }: { owner: string }) {
 
   function start() {
     if (!selected.length || (!recorded && (!preferences.profile.trim() || !Number.isInteger(preferences.minutes) || preferences.minutes < 1 || preferences.minutes > 15))) {
-      setView('feed')
+      setView(selected.length ? 'profile' : 'feed')
       setNotice(selected.length ? 'Check the listener profile and briefing length.' : 'Choose at least one headline to start your briefing.')
-      requestAnimationFrame(() => document.getElementById(selected.length ? 'preferences' : 'stories-title')?.scrollIntoView({ block: 'center' }))
+      requestAnimationFrame(() => (selected.length ? document.querySelector<HTMLTextAreaElement>('.profile-settings textarea')?.focus() : document.getElementById('stories-title')?.scrollIntoView({ block: 'center' })))
       return
     }
     const rect = trigger.current!.getBoundingClientRect()
@@ -70,6 +72,7 @@ export function NewsWorkspace({ owner }: { owner: string }) {
   return <div className="workspace">
     <a className="skip-link" href="#workspace-content">Skip to content</a>
     <header className={view === 'feed' ? 'masthead with-search' : 'masthead'}>
+      {view === 'feed' && <AudioRibbon />}
       <div className="masthead-inner"><div className="brand-lockup"><Brand /><span className="publication">The Liquid Briefing</span></div></div>
     </header>
     {view === 'feed' && <div className="search-rail">
@@ -91,35 +94,25 @@ export function NewsWorkspace({ owner }: { owner: string }) {
         <Orb />{selected.length > 0 && <small aria-hidden="true">{selected.length}</small>}
       </button>
       <nav aria-label="Workspace" className="workspace-nav">
-        {(['feed', 'briefings'] as const).map(id => <button type="button" key={id} aria-current={view === id ? 'page' : undefined} onClick={() => { setView(id); window.scrollTo(0, 0) }}>
-          <Icon name={id === 'feed' ? 'feed' : 'discussion'} />{id === 'feed' ? 'News feed' : 'Briefings'}
+        {(['feed', 'briefings', 'profile'] as const).map(id => <button type="button" key={id} aria-current={view === id ? 'page' : undefined} onClick={() => { setView(id); window.scrollTo(0, 0) }}>
+          <Icon name={id === 'feed' ? 'feed' : id === 'profile' ? 'profile' : 'discussion'} />{id === 'feed' ? 'News feed' : id === 'profile' ? 'Profile' : 'Briefings'}
         </button>)}
       </nav>
     </div>
     <section id="workspace-content" tabIndex={-1} aria-label="News workspace" className="page-width">
-      {view === 'briefings' ? <Briefings key={historyVersion} owner={owner} /> : <>
+      {view === 'profile' ? <Profile preferences={preferences} recorded={recorded} sample={sample} online={online} onSave={settings => {
+        setPreferences(settings.preferences)
+        setRecorded(settings.recorded)
+        try {
+          localStorage.setItem('tio-profile-' + owner, JSON.stringify(settings))
+          return 'Preferences saved on this device.'
+        } catch { return 'Applied for this visit. Your browser could not save these preferences.' }
+      }} /> : view === 'briefings' ? <Briefings key={historyVersion} owner={owner} /> : <>
         {submittedQuestion && <div role="status" className="search-result"><strong>{submittedQuestion}</strong><p>Article search is a preview. It hasn’t searched the dataset.</p></div>}
-        <div className="page-title"><h1>Your newsroom</h1><span className="edition-note">{sample ? 'Sample edition' : 'News edition'}</span></div>
-        <section className="briefing-cover" aria-labelledby="cover-title"><AudioRibbon /><div className="cover-copy">
-          <span className="cover-meta"><Icon name="discussion" /> English · Synthetic narration</span>
-          <h2 id="cover-title">The daily <em>briefing</em></h2>
-          <p>Swipe right to include a headline or left to skip it. Tap the host orb to discuss your lineup.</p>
-        </div></section>
-        <section className="lineup" aria-label="Selected headlines">
-          <div className="lineup-label"><h2>Your lineup</h2><span>{selected.length} / 6</span></div>
-          {selected.length ? <ol>{selected.map(s => <li key={s.id}><button onClick={() => choose(s, false)} aria-label={'Remove ' + s.title}>{s.title} <span aria-hidden="true">×</span></button></li>)}</ol> : <p>Included headlines appear here.</p>}
-          <span role="status" className={notice.startsWith('Your lineup') || notice.startsWith('Choose') || notice.startsWith('Check') ? 'selection-notice' : 'sr-only'}>{notice}</span>
-        </section>
-        {online && <details id="preferences" className="briefing-settings"><summary>Briefing settings</summary>
-          {sample && <label className="field">Playback<select value={recorded ? 'sample' : 'live'} onChange={e => setRecorded(e.target.value === 'sample')}><option value="sample">Recorded sample</option><option value="live">Generate a personal briefing</option></select></label>}
-          {!recorded && <div className="setup-fields">
-            <label className="field">Listener profile<textarea value={preferences.profile} maxLength={3000} onChange={e => setPreferences({ ...preferences, profile: e.target.value })} /></label>
-            <div className="format-fields"><label className="field">Format<select value={preferences.mode} onChange={e => setPreferences({ ...preferences, mode: e.target.value as Preferences['mode'] })}><option value="panel">Expert panel</option><option value="presenter">Presenter</option></select></label>
-            <label className="field">Minutes<input type="number" min="1" max="15" value={preferences.minutes} onChange={e => setPreferences({ ...preferences, minutes: Number(e.target.value) })} /></label></div>
-          </div>}
-        </details>}
+        <h1 className="sr-only">News feed</h1>
+        <span role="status" className={notice.startsWith('Your lineup') || notice.startsWith('Choose') || notice.startsWith('Check') ? 'selection-notice' : 'sr-only'}>{notice}</span>
         <section aria-labelledby="stories-title">
-          <div className="section-title"><h2 id="stories-title">Top stories</h2><span>{stories.length} stories</span></div>
+          <div className="section-title"><h2 id="stories-title">Top articles</h2></div>
           <ul className="story-grid selectable-stories">{stories.map(story => <li key={story.id}>
             <article data-choice={picks[story.id] === undefined ? undefined : picks[story.id] ? 'include' : 'skip'}
               onPointerDown={e => {
@@ -147,7 +140,9 @@ export function NewsWorkspace({ owner }: { owner: string }) {
                 const dx = e.clientX - start.x
                 if (Math.abs(dx) >= 48 && Math.abs(dx) > 1.5 * Math.abs(e.clientY - start.y)) choose(story, dx > 0)
               }}>
-              {story.image && <img className="story-photo" src={'/edition/' + story.image + '.webp'} alt="" draggable={false} />}
+              {typeof story.thumb_url === 'string' && /^https?:\/\//i.test(story.thumb_url) &&
+                <img className="story-photo" src={story.thumb_url} alt="" draggable={false} loading="lazy"
+                  referrerPolicy="no-referrer" onError={event => { event.currentTarget.hidden = true }} />}
               <p className="topic">{story.topic}</p><h3>{story.title}</h3><p className="story-summary">{story.summary}</p>
               <div className="story-vote"><button aria-pressed={picks[story.id] === false} onClick={() => choose(story, false)}>← {picks[story.id] === false ? 'Skipped' : 'Skip'}</button>
               <button aria-pressed={picks[story.id] === true} onClick={() => choose(story, true)}>{picks[story.id] ? 'Included' : 'Include'} →</button></div>

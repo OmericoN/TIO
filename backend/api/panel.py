@@ -27,6 +27,7 @@ from discussion.personas import AgentPersona, load_starter_personas
 from discussion.stories import INDEX, available_stories
 from research.matcher import REPO_ROOT, create_matcher
 from research.openai_client import MatchProcessingError
+from recommender.db import connect
 
 log = logging.getLogger(__name__)
 
@@ -86,10 +87,21 @@ def news_events():
 
 @router.get("/stories")
 def feed():
+    events = news_events()
+    thumbnails = {}
+    if INDEX.exists():
+        ids = [a.id for story in events for a in story.articles if not a.official_release]
+        try:
+            with connect() as db:
+                thumbnails = dict(db.execute(
+                    "SELECT id, thumb_url FROM public.articles WHERE id = ANY(%s)", (ids,)))
+        except (RuntimeError, psycopg.Error):
+            log.warning("Article thumbnails are unavailable.")
     return {"sample": not INDEX.exists(), "stories": [
         {"id": s.id, "title": s.headline, "topic": s.articles[0].publisher,
+         "thumb_url": next((thumbnails[a.id] for a in s.articles if thumbnails.get(a.id)), None),
          "summary": " · ".join(dict.fromkeys(a.language.upper() for a in s.articles))}
-        for s in news_events()]}
+        for s in events]}
 
 
 def indexed_or_sample_panel(start):

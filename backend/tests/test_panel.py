@@ -29,6 +29,31 @@ def line(text="Let's hear from the panel.", action="respond", citations=(), hand
 
 
 class PanelTest(unittest.TestCase):
+    def test_feed_uses_matching_database_thumbnails(self):
+        stories = fixture().stories
+        article = stories[0].articles[1]
+        with patch.object(api, "news_events", return_value=stories), patch.object(api, "INDEX") as index, \
+                patch.object(api, "connect") as connection:
+            index.exists.return_value = True
+            database = connection.return_value.__enter__.return_value
+            database.execute.return_value = [(article.id, "https://publisher.example/image.jpg")]
+            result = api.feed()
+            self.assertEqual(result["stories"][0]["thumb_url"], "https://publisher.example/image.jpg")
+            self.assertIsNone(result["stories"][1]["thumb_url"])
+            sql, params = database.execute.call_args.args
+            self.assertIn("id = ANY(%s)", sql)
+            self.assertIn(article.id, params[0])
+            index.exists.return_value = False
+            connection.reset_mock()
+            self.assertTrue(api.feed()["sample"])
+            connection.assert_not_called()
+
+    def test_feed_survives_thumbnail_database_failure(self):
+        with patch.object(api, "news_events", return_value=fixture().stories), patch.object(api, "INDEX") as index, \
+                patch.object(api, "connect", side_effect=RuntimeError("Database unavailable")):
+            index.exists.return_value = True
+            self.assertTrue(all(s["thumb_url"] is None for s in api.feed()["stories"]))
+
     def test_swiped_lineup_is_exact_and_ordered(self):
         stories = fixture().stories
         ids = [story.id for story in reversed(stories)]
