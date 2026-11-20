@@ -4,13 +4,16 @@ import type { CSSProperties } from 'react'
 import { AgentStage } from './AgentStage'
 import { Sources } from './BriefingHistory'
 import { audioUrl, historyStore, recordedTurns } from './briefings'
-import type { Briefing, Entry, Headline, Preferences, Segment } from './briefings'
+import type { Briefing, DiscussionPlan, Entry, Headline, Preferences, Segment } from './briefings'
 
 async function post<T>(url: string, body = {}): Promise<T> {
   const response = await fetch('/api/panel' + url, {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
   })
-  if (!response.ok) throw new Error((await response.json().catch(() => null))?.detail || 'Panel unavailable. Check the backend connection.')
+  if (!response.ok) {
+    const detail = (await response.json().catch(() => null))?.detail
+    throw new Error(typeof detail === 'string' ? detail : detail?.[0]?.msg || 'Panel unavailable. Check the backend connection.')
+  }
   return response.json()
 }
 
@@ -41,12 +44,13 @@ type Props = {
   owner: string
   stories: Headline[]
   preferences: Preferences
+  plan?: DiscussionPlan
   recorded: boolean
   origin: { x: number; y: number; context: AudioContext | null }
   onClose: () => void
 }
 
-export function PanelPlayer({ owner, stories, preferences, recorded, origin, onClose }: Props) {
+export function PanelPlayer({ owner, stories, preferences, plan, recorded, origin, onClose }: Props) {
   const [running, setRunning] = useState(true)
   const [status, setStatus] = useState('Opening your briefing…')
   const [active, setActive] = useState<Segment | null>(null)
@@ -211,9 +215,10 @@ export function PanelPlayer({ owner, stories, preferences, recorded, origin, onC
       advanceSample()
       return
     }
-    setStatus('Preparing your selected headlines…')
+    setStatus('Preparing your briefing…')
     try {
-      const result = await post<{ id: string; sample: boolean }>('', { ...preferences, story_ids: stories.map(s => s.id) })
+      const lineup = plan ? { briefing_plan: plan } : { story_ids: stories.map(s => s.id) }
+      const result = await post<{ id: string; sample: boolean }>('', { ...preferences, ...lineup })
       if (generation.current !== gen) {
         await fetch('/api/panel/' + result.id, { method: 'DELETE' })
         return
