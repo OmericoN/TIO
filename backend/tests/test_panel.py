@@ -113,6 +113,26 @@ class PanelTest(unittest.TestCase):
         self.assertIn("5.33 pm", landing)
         self.assertIsNone(spoken_claim("Air Force One landed at 6.10 pm local time.", text))
 
+    def test_signature_lines_are_offered_only_where_they_fit(self):
+        panel = fixture()
+        host, guest = panel.host, panel.roster[0]
+        for i in (host, guest):
+            panel.personas[i] = panel.personas[i].model_copy(update={
+                "intro_template": "I'm here.", "outro_template": "Bye for now.", "catchphrases": ["Follow the money."]})
+        offered, notes = panel.signature_lines(guest)
+        self.assertEqual(offered, {"intro_template"})
+        self.assertIn("Do not recite it", notes)
+        panel.speaker_turns[guest] = 1
+        offered, notes = panel.signature_lines(guest)
+        self.assertEqual(offered, {"catchphrases"})                    # second turn: a reworded catchphrase may fit
+        self.assertIn("Do not say your name", notes)
+        self.assertEqual(panel.speaker(), host)
+        panel.heard(line("Hi, I'm Tio. Rates fell."), [], 1)
+        self.assertEqual((panel.speaker_turns[host], panel.openings[host]), (1, ["Hi, I'm Tio."]))
+        panel.speaker_turns[host] = 2
+        panel.index, panel.phase = len(panel.stories) - 1, "close"
+        self.assertEqual(panel.signature_lines(host)[0], {"outro_template"})
+
     def test_repair_once_and_withhold_unsupported_interpretation(self):
         panel = fixture()
         author, verifier = Mock(), Mock()

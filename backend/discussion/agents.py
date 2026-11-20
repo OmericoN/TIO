@@ -45,7 +45,10 @@ def prepare_agent_turn(
     *,
     addressed_host_id: UUID | None = None,
     reply_to_host_id: UUID | None = None,
+    signature: frozenset[str] = frozenset({"catchphrases", "intro_template", "outro_template"}),
 ) -> PreparedAgentTurn | None:
+    """signature: which of the persona's signature lines to offer this turn. Offering them on every turn makes the
+    model repeat them verbatim; the panel offers each only where it fits (see Panel.signature_lines)."""
     _, next_host_id = plan_speaker(
         ranked_host_ids, addressed_host_id=addressed_host_id, reply_to_host_id=reply_to_host_id
     )
@@ -59,7 +62,7 @@ def prepare_agent_turn(
     style = persona.model_dump_json(
         include={
             "target_audience", "expertise_topics", "formality", "humor_level",
-            "pace_wpm", "catchphrases", "do_rules", "dont_rules", "intro_template", "outro_template",
+            "pace_wpm", "do_rules", "dont_rules", *signature,
         },
         exclude_none=True,
     )
