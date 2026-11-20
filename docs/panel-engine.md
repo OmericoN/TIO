@@ -12,6 +12,8 @@ Start FastAPI and Vite using the repository README. Use one FastAPI worker on lo
 
 ## Engine handoff
 
+For a personalized session, start both servers and open the [recommender lab through Vite](http://localhost:5173/recommender-lab). Choose a listener, click **Recommend**, pin any must-have stories, then click **Generate** and **Start discussion**. The player sends the ordered segments, article tones, and host roster to `POST /api/panel` as `briefing_plan`. Every planned story stays in order, even when selected stories exceed the requested length. Tio moderates a debate and presents solo when the matcher cannot confirm a suitable host.
+
 To exercise the matcher from the local API, send a test shortlist request with the backend running and its database and provider credentials configured.
 
 ```sh

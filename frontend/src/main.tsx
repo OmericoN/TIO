@@ -119,7 +119,7 @@ function TermsAgreement() {
 }
 
 function App() {
-  const [owner, setOwner] = useState('')
+  const [account, setAccount] = useState<{ owner: string; listenerId?: string }>()
   const [pending, setPending] = useState(false)
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
@@ -283,7 +283,8 @@ function App() {
         setError('Sign-in failed. Try again.')
         return
       }
-      setOwner('account-' + (session.user?.id || email.toLowerCase()))
+      setAccount({ owner: 'account-' + (session.user?.id || email.toLowerCase()),
+        listenerId: demoAvailable ? session.user?.id : undefined })
     } catch {
       setError('Could not reach Supabase. Try again.')
     } finally {
@@ -291,7 +292,7 @@ function App() {
     }
   }
 
-  if (owner) return <main><NewsWorkspace owner={owner} /></main>
+  if (account) return <main><NewsWorkspace {...account} /></main>
 
   return (
     <main className="auth-page">

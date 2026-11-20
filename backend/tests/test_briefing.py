@@ -1,13 +1,14 @@
 import unittest
 from datetime import datetime, timedelta, timezone
+from unittest.mock import Mock, patch
 
 from pydantic import ValidationError
 
 from api.briefing import GenerateRequest
-from briefing.generate import choose_hosts, group_stories, run_matcher
+from briefing.generate import generate, group_stories, run_matcher
 from briefing.timing import (MAX_S, MIN_S, OVERHEAD_S, TRANSITION_S, Story, fit, story_seconds, total_seconds)
 from main import app
-from recommender.recommend import Article
+from recommender.recommend import Article, Listener
 
 NOW = datetime(2026, 11, 18, tzinfo=timezone.utc)
 
@@ -51,6 +52,10 @@ class TimingTest(unittest.TestCase):
         self.assertEqual(counts, sorted(counts))
         self.assertGreater(counts[-1], 40)
 
+    def test_short_debate_still_has_a_story(self) -> None:
+        story = Story(["a"], {"p"}, 800)
+        self.assertEqual(fit([story], minutes=1, mode="debate"), ([story], []))
+
 
 class GroupingTest(unittest.TestCase):
     def test_articles_on_one_event_form_one_story(self) -> None:
@@ -64,13 +69,29 @@ class GroupingTest(unittest.TestCase):
         self.assertEqual([s.selected for s in stories], [False, True])
 
 
-class HostsTest(unittest.TestCase):
-    def test_our_order_minus_vetoes(self) -> None:
-        ranked = ["a", "b", "c", "d", "e", "f"]
-        self.assertEqual(choose_hosts(ranked, {"c", "b"}, 1), (["b"], False))
-        self.assertEqual(choose_hosts(ranked, {"c", "b", "a"}, 2), (["a", "b"], False))
-        self.assertEqual(choose_hosts(ranked, {"f"}, 1), (["a"], True))   # outside our top 5: fall back, flagged
-        self.assertEqual(choose_hosts(ranked, None, 2), (["a", "b"], True))
+class GenerateTest(unittest.TestCase):
+    def test_vetoed_guests_are_not_used_and_refill_preserves_filters(self) -> None:
+        conn = Mock()
+        conn.execute.return_value.fetchone.return_value = ("moderator",)
+        conn.execute.return_value.fetchall.return_value = [(144,)]
+        listener = Listener([1, 0], ["en"], preferences="Explain rates")
+        matcher = Mock()
+        matcher.match_personas.return_value = {
+            "articles": [{"article_id": "keep", "desired_tone": "serious"}], "agent_ids": [],
+        }
+        with (patch("briefing.generate.load_listener", return_value=listener),
+              patch("briefing.generate.rank_hosts", return_value=["moderator", "guest"]),
+              patch("briefing.generate.host_affinity", return_value={}),
+              patch("briefing.generate.load_articles", return_value=dict([art("keep")])) as load,
+              patch("briefing.generate.recommend", return_value={"article_ids": []}) as refill):
+            plan = generate(conn, "u1", ["keep", "dismissed"], [], 5, "debate", matcher=matcher,
+                            days=2, excluded_article_ids=["dismissed"])
+        load.assert_called_once_with(conn, ["keep"])
+        refill.assert_called_once_with(conn, listener, None, excluded_article_ids=["dismissed", "keep"],
+                                       days=2, limit=30)
+        matcher.match_personas.assert_called_once_with(["keep"], ["guest"], 1)
+        self.assertEqual((plan["article_ids"], plan["tones"], plan["hosts"], plan["hosts_from_matcher"]),
+                         (["keep"], {"keep": "serious"}, [], False))
 
 
 class MatcherTest(unittest.TestCase):
@@ -94,7 +115,26 @@ class MatcherTest(unittest.TestCase):
             def match_personas(self, *args):
                 raise RuntimeError("down")
         tones, accepted, error = run_matcher(Broken(), ["a"], ["h1"])
-        self.assertEqual((tones, error), ({}, "down"))
+        self.assertEqual((tones, accepted, error), ({}, set(), "down"))
+
+    def test_incomplete_chunk_preserves_earlier_tones_without_approving_hosts(self) -> None:
+        ids = [f"a{i}" for i in range(26)]
+        matcher = Mock()
+        first = {"articles": [{"article_id": i, "desired_tone": "neutral"} for i in ids[:25]], "agent_ids": ["h1"]}
+        incomplete = {"articles": [], "agent_ids": ["h1"]}
+        matcher.match_personas.side_effect = [first, incomplete, incomplete]
+        tones, accepted, error = run_matcher(matcher, ids, ["h1"])
+        self.assertEqual(list(tones), ids[:25])
+        self.assertEqual(accepted, set())
+        self.assertIn("input order", error)
+
+    def test_no_guest_candidates_still_gets_tones(self) -> None:
+        matcher = Mock()
+        matcher.match_personas.return_value = {
+            "articles": [{"article_id": "a", "desired_tone": "neutral"}], "agent_ids": [],
+        }
+        self.assertEqual(run_matcher(matcher, ["a"], []), ({"a": "neutral"}, set(), None))
+        matcher.match_personas.assert_called_once_with(["a"], [], 1)
 
 
 class EndpointTest(unittest.TestCase):

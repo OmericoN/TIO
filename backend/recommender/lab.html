@@ -59,7 +59,7 @@ details summary { cursor: pointer; color: var(--muted); font-size: .85rem; }
 <body>
 <main>
   <div style="display:flex;flex-direction:column;gap:16px">
-    <div><h1>Recommender Lab</h1><p class="muted" style="margin:0">1. <code>POST /api/recommend</code>: the listener's top 50. 2. Select must-haves, set a length, press Generate: <code>POST /api/briefing/generate</code> fits the list and runs the tone matcher.</p></div>
+    <div><h1>Recommender Lab</h1><p class="muted" style="margin:0">Get recommendations, pin any must-have stories, then generate and start your discussion.</p><a id="playback-link" hidden>Open the lab with playback</a></div>
     <form id="form">
       <label id="user-box">Listener<select id="user"></select><span id="user-info" class="muted"></span></label>
       <label>Focus (optional)<input id="focus" placeholder="e.g. Elon Musk and Tesla, no crypto, last 2 days"></label>
@@ -75,7 +75,7 @@ details summary { cursor: pointer; color: var(--muted); font-size: .85rem; }
     <form id="gen-form" class="panel">
       <h2>Generate</h2>
       <div class="row">
-        <label>Length (minutes)<input id="gen-minutes" type="number" min="1" max="120" value="10"></label>
+        <label>Length (minutes)<input id="gen-minutes" type="number" min="1" max="120" step="any" required value="10"></label>
         <label>Mode<select id="gen-mode"><option value="presenter">Presenter</option><option value="debate">Debate</option></select></label>
       </div>
       <button class="primary" type="submit" id="gen-run" disabled>Generate (run Recommend first)</button>
@@ -86,7 +86,14 @@ details summary { cursor: pointer; color: var(--muted); font-size: .85rem; }
 </main>
 <script>
 const $ = (id) => document.getElementById(id);
-const state = { pins: [], dismissed: [], info: {}, list: [], focus: null, catalog: { users: [], personas: [] } };
+const state = { pins: [], dismissed: [], info: {}, recommendation: null, catalog: { users: [], personas: [] } };
+const backendOnly = location.port === "8000";
+if (backendOnly) {
+  const playback = new URL(location.href);
+  playback.port = "5173";
+  $("playback-link").href = playback.href;
+  $("playback-link").hidden = false;
+}
 const PRESETS = ["Jensen Huang", "oil and gold, last 2 days", "markets but no crypto or bitcoin", "Elon Musk and Tesla", "central banks and inflation this week", "AI stocks without Nvidia"];
 
 function el(tag, attrs = {}, ...kids) {
@@ -136,6 +143,9 @@ async function run(e) {
   const out = $("results"); out.textContent = "";
   const status = el("p", { class: "status muted", text: "Running…" }); out.append(status);
   const body = request(); const t0 = performance.now();
+  state.recommendation = null;
+  $("gen-run").disabled = true;
+  $("run").disabled = true;
   try {
     const rec = await api("/api/recommend", body);
     const ms = Math.round(performance.now() - t0);
@@ -164,22 +174,28 @@ async function run(e) {
     out.append(list);
     const raw = el("details", {}, el("summary", { text: "Request and raw response" }), el("pre", { text: "POST /api/recommend\n" + JSON.stringify(body, null, 2) + "\n\n" + JSON.stringify(rec, null, 2) }));
     out.append(raw);
-    state.list = rec.article_ids; state.focus = body.focus || null;
-    $("gen-run").disabled = false; $("gen-run").textContent = "Generate";
+    state.recommendation = { user_id: body.user_id, article_ids: rec.article_ids, focus: body.focus, days: body.days };
+    $("gen-run").disabled = !rec.article_ids.length || $("user").value !== body.user_id;
+    $("gen-run").textContent = "Generate";
   } catch (err) {
     status.textContent = "Error: " + err.message;
+  } finally {
+    $("run").disabled = false;
   }
 }
 $("form").addEventListener("submit", run);
 
 async function generatePlan(e) {
   e?.preventDefault();
+  const recommendation = state.recommendation;
+  if (!recommendation?.article_ids.length || $("user").value !== recommendation.user_id) return;
   const out = $("results"); out.textContent = "";
   const status = el("p", { class: "status muted", text: "Generating: fitting the list and running the tone matcher…" }); out.append(status);
-  const body = { user_id: $("user").value, article_ids: state.list, selected_article_ids: [...state.pins],
+  const body = { ...recommendation, selected_article_ids: [...state.pins], excluded_article_ids: [...state.dismissed],
                  minutes: +$("gen-minutes").value || 10, mode: $("gen-mode").value };
-  if (state.focus) body.focus = state.focus;
   const t0 = performance.now();
+  $("gen-run").disabled = true;
+  $("run").disabled = true;
   try {
     const plan = await api("/api/briefing/generate", body);
     Object.assign(state.info, await api("/api/recommend/lookup", { article_ids: plan.article_ids }));
@@ -188,8 +204,27 @@ async function generatePlan(e) {
     const personas = Object.fromEntries(state.catalog.personas.map(p => [p.id, p]));
     const hosts = el("div", { class: "hosts" });
     plan.hosts.forEach(id => { const p = personas[id] || { name: id, slug: "" }; hosts.append(el("div", { class: "host" }, el("b", { text: p.name }), el("span", { class: "muted", text: p.slug }))); });
-    out.append(el("h2", { text: plan.hosts_from_matcher ? "Hosts (our order, accepted by the matcher)" : "Hosts (our order; matcher gave no choice)" }), hosts,
-               el("h2", { text: "Plan, story by story" }));
+    out.append(el("h2", { text: "Discussion hosts" }),
+               plan.hosts.length ? hosts : el("p", { text: "Tio will present solo." }));
+    if (!backendOnly && plan.segments.length) {
+      const start = el("button", { type: "button", class: "primary", text: "Start discussion" });
+      start.onclick = () => {
+        const stories = plan.segments.map(({ article_ids: [id] }) => ({
+          id, title: state.info[id]?.headline || id, topic: state.info[id]?.publication || "", summary: "",
+        }));
+        const preferences = { profile: plan.profile, mode: body.mode === "debate" ? "panel" : "presenter", minutes: body.minutes };
+        try {
+          sessionStorage.setItem("tio-briefing-plan", JSON.stringify({
+            stories, preferences, listenerId: body.user_id, plan: { segments: plan.segments, hosts: plan.hosts, tones: plan.tones },
+          }));
+          location.assign("/demo?briefing=1");
+        } catch {
+          status.textContent = "The browser could not open the discussion. Check whether site storage is enabled.";
+        }
+      };
+      out.append(start);
+    }
+    out.append(el("h2", { text: "Plan, story by story" }));
     const list = el("ol", { class: "articles" });
     plan.segments.forEach((seg, i) => {
       const lines = seg.article_ids.map(id => {
@@ -204,6 +239,9 @@ async function generatePlan(e) {
       el("pre", { text: "POST /api/briefing/generate\n" + JSON.stringify(body, null, 2) + "\n\n" + JSON.stringify(plan, null, 2) })));
   } catch (err) {
     status.textContent = "Error: " + err.message;
+  } finally {
+    $("gen-run").disabled = $("user").value !== body.user_id;
+    $("run").disabled = false;
   }
 }
 $("gen-form").addEventListener("submit", generatePlan);
@@ -212,6 +250,7 @@ $("user").onchange = () => {
   const u = state.catalog.users.find(u => u.id === $("user").value);
   $("user-info").textContent = u ? `${u.occupation || ""} · ${u.interests || ""} · ${u.minutes} min` : "";
   if (u && u.minutes) $("gen-minutes").value = u.minutes;
+  if (state.recommendation?.user_id !== $("user").value) $("gen-run").disabled = true;
 };
 
 api("/api/recommend/catalog").then(c => {

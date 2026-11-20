@@ -19,6 +19,7 @@ from recommender.embeddings import from_pgvector
 from recommender.hosts import host_affinity, rank_hosts
 from recommender.focus import parse_focus
 from recommender.recommend import Article, _Index, load_listener, recommend
+from research.openai_client import MatchProcessingError
 
 logger = logging.getLogger(__name__)
 
@@ -30,6 +31,10 @@ EXTEND_BATCH = 30           # articles asked from the recommender per extension 
 
 _matcher = None
 _matcher_lock = Lock()
+
+
+class UnknownSelectedArticles(ValueError):
+    pass
 
 
 def _get_matcher():
@@ -86,16 +91,6 @@ def group_stories(ids: list[str], articles: dict[str, tuple[Article, int]], sele
     return stories
 
 
-def choose_hosts(ranked: list[str], accepted: set[str] | None, n: int) -> tuple[list[str], bool]:
-    """The first n of our order that the matcher accepted. Returns (hosts, fallback_used)."""
-    candidates = ranked[:MATCHER_CANDIDATES]
-    if accepted:
-        hosts = [p for p in candidates if p in accepted][:n]
-        if hosts:
-            return hosts, False
-    return ranked[:n], True
-
-
 def _pace(conn, persona_ids: list[str]) -> float:
     if not persona_ids:
         return DEFAULT_WPM
@@ -113,7 +108,9 @@ def run_matcher(matcher, article_ids: list[str], candidates: list[str]) -> tuple
         chunk = article_ids[start:start + MATCHER_CHUNK]
         for attempt in (1, 2):
             try:
-                result = matcher.match_personas(chunk, candidates, len(candidates))
+                result = matcher.match_personas(chunk, candidates, max(1, len(candidates)))
+                if [row["article_id"] for row in result["articles"]] != chunk:
+                    raise MatchProcessingError("The matcher did not return the articles in input order.")
                 tones.update({row["article_id"]: row["desired_tone"] for row in result["articles"]})
                 accepted &= set(result["agent_ids"])
                 break
@@ -121,58 +118,64 @@ def run_matcher(matcher, article_ids: list[str], candidates: list[str]) -> tuple
                 if attempt == 2:
                     errors.append(str(err) or type(err).__name__)
                     logger.warning("matcher failed on %d articles: %s", len(chunk), err)
-    return tones, accepted, "; ".join(errors) or None
+    return tones, set() if errors else accepted, "; ".join(errors) or None
 
 
 def generate(conn, user_id: str, article_ids: list[str], selected_article_ids: list[str], minutes: float,
-             mode: str = "presenter", focus: str | None = None, matcher=None, more=None) -> dict:
-    """`focus` is the listener's focus text, so added articles respect it. `more(listener, excluded_ids, limit)`
-    returns the recommender's next article ids (injectable for tests)."""
+             mode: str = "presenter", focus: str | None = None, matcher=None, *,
+             days: int | None = None, excluded_article_ids: list[str] = ()) -> dict:
     listener = load_listener(conn, user_id)
     n_hosts = 2 if mode == "debate" else 1
     selected = set(selected_article_ids)
-    ids = list(dict.fromkeys([*selected_article_ids, *article_ids]))
+    excluded = set(excluded_article_ids) - selected
+    ids = list(dict.fromkeys([*selected_article_ids, *(i for i in article_ids if i not in excluded)]))
 
     persona_ids = rank_hosts(conn, listener.vector, host_affinity(conn, listener.user_id),
                              listener.default_persona_id, listener.chosen_persona_ids)
-    wpm = _pace(conn, persona_ids[:n_hosts])
+    moderator = conn.execute("select id::text from public.agent_personas where slug = 'main-host'").fetchone()
+    moderator_id = moderator[0] if moderator else None
+    candidates = [i for i in persona_ids if mode != "debate" or i != moderator_id][:MATCHER_CANDIDATES]
+    wpm = _pace(conn, candidates[:n_hosts])
 
     parsed_focus = parse_focus(focus) if focus else None
-    more = more or (lambda lst, excluded, limit: recommend(conn, lst, parsed_focus, excluded_article_ids=excluded,
-                                                           limit=limit)["article_ids"])
+    window_days = (parsed_focus.since_days if parsed_focus else None) or days
+    event_hours = window_days * 24 if window_days else None
     articles = load_articles(conn, ids)
-    kept, _ = fit(group_stories(ids, articles, selected), minutes, wpm, mode)
+    if missing := selected - articles.keys():
+        raise UnknownSelectedArticles("Unknown selected articles: " + ", ".join(sorted(missing)))
+    kept, _ = fit(group_stories(ids, articles, selected, event_hours), minutes, wpm, mode)
     added: list[str] = []
     for _ in range(EXTEND_ROUNDS):
         if total_seconds(kept, wpm, mode) >= FILLED * minutes * 60:
             break
-        new = [i for i in more(listener, ids + added, EXTEND_BATCH) if i not in articles]
+        new = recommend(conn, listener, parsed_focus, excluded_article_ids=list(excluded) + ids + added,
+                        days=days, limit=EXTEND_BATCH)["article_ids"]
         if not new:
             break
         added += new
         articles.update(load_articles(conn, new))
         current = [i for s in kept for i in s.article_ids] + new
-        kept, _ = fit(group_stories(current, articles, selected), minutes, wpm, mode)
+        kept, _ = fit(group_stories(current, articles, selected, event_hours), minutes, wpm, mode)
 
     final_ids = [i for s in kept for i in s.article_ids]
     tones: dict[str, str] = {}
-    accepted: set[str] | None = None
+    accepted: set[str] = set()
     matcher_error = None
     if final_ids:
         try:
-            tones, accepted, matcher_error = run_matcher(matcher or _get_matcher(), final_ids,
-                                                         persona_ids[:MATCHER_CANDIDATES])
+            tones, accepted, matcher_error = run_matcher(matcher or _get_matcher(), final_ids, candidates)
         except Exception as err:  # noqa: BLE001 - e.g. no OPENAI_API_KEY for the matcher
             matcher_error = str(err) or type(err).__name__
-    hosts, fallback = choose_hosts(persona_ids, accepted, n_hosts)
+    hosts = [i for i in candidates if i in accepted][:n_hosts]
 
-    wpm = _pace(conn, hosts)
+    wpm = _pace(conn, hosts or ([moderator_id] if moderator_id else []))
     in_list = set(ids)
     return {
         "article_ids": final_ids,
+        "profile": listener.preferences[:3000] or "Explain what changed and why it matters.",
         "persona_ids": persona_ids,
         "hosts": hosts,
-        "hosts_from_matcher": not fallback,
+        "hosts_from_matcher": bool(hosts),
         "tones": tones,
         "segments": [{"article_ids": s.article_ids, "estimated_seconds": round(story_seconds(s, wpm, mode))}
                      for s in kept],

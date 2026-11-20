@@ -87,6 +87,7 @@ class Listener:
     consumed_article_ids: list[str] = field(default_factory=list)
     facets: list[list[float]] = field(default_factory=list)  # one vector per interest the listener listed
     chosen_persona_ids: list[str] = field(default_factory=list)  # the three personas picked at sign-up  # one vector per interest the listener listed
+    preferences: str = ""
 
 
 def interest_facets(text: str | None) -> list[str]:
@@ -182,7 +183,8 @@ def load_listener(conn, user_id: str, embed=embed_query, embed_batch=embed_many)
                     consumed_article_ids=list(profile["past_article_ids"]),
                     facets=[normalize(v) for v in embed_batch(interest_facets(profile["interests_text"]))]
                     if profile["interests_text"] else [],
-                    chosen_persona_ids=list(profile["chosen_persona_ids"] or []))
+                    chosen_persona_ids=list(profile["chosen_persona_ids"] or []),
+                    preferences=profile_text(profile))
 
 
 # --------------------------------------------------------------------------------------------------------------
@@ -532,12 +534,14 @@ def recommend(conn, listener: Listener, focus: Focus | None = None, pinned_artic
 
     # Each story's article followed by its coverage from other outlets, until `wanted` articles (picked ones kept).
     index = _Index(pool + pinned)
-    article_ids: list[str] = []
+    article_ids = [a.id for a in pinned]
+    pinned_ids = set(article_ids)
     taken = {a.id for a in events}
     for event in events:
         if len(article_ids) >= wanted:
             break
-        article_ids.append(event.id)
+        if event.id not in pinned_ids:
+            article_ids.append(event.id)
         for sibling in siblings(event, pool, taken, event_hours, index):
             if len(article_ids) >= wanted:
                 break

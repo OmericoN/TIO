@@ -22,7 +22,7 @@ from pydantic import BaseModel, Field, ValidationError, model_validator
 
 from discussion.panel import Panel, Turn, model, passages, review_event, select_stories, source_set
 from discussion.agents import DiscussionLine
-from discussion.matched import CompletedMatch, InvalidMatch, matched_panel, test_shortlist
+from discussion.matched import CompletedMatch, DiscussionPlan, InvalidMatch, matched_panel, planned_panel, test_shortlist
 from discussion.personas import AgentPersona, load_starter_personas
 from discussion.stories import INDEX, available_stories
 from research.matcher import REPO_ROOT, create_matcher
@@ -44,14 +44,21 @@ router = APIRouter(prefix="/panel", dependencies=[Depends(local)], tags=["panel"
 class Start(BaseModel):
     profile: str = Field(min_length=1, max_length=3000)
     mode: Literal["panel", "presenter"] = "panel"
-    minutes: int = Field(default=4, ge=1, le=15)
+    minutes: float = Field(default=4, ge=1, le=120)
     ranked_guests: dict[str, list[UUID]] | None = None
     story_ids: list[str] | None = Field(default=None, min_length=1, max_length=6)
     match_result: CompletedMatch | None = None
     test_shortlist: bool = False
+    briefing_plan: DiscussionPlan | None = None
 
     @model_validator(mode="after")
     def one_guest_source(self):
+        if self.briefing_plan is not None:
+            if any((self.ranked_guests is not None, self.match_result is not None,
+                    self.test_shortlist, self.story_ids is not None)):
+                raise ValueError("A briefing plan already supplies the stories and hosts.")
+        elif self.minutes > 15 or self.minutes % 1:
+            raise ValueError("Choose whole minutes from 1 to 15 for an unplanned discussion.")
         if sum((self.ranked_guests is not None, self.match_result is not None, self.test_shortlist)) > 1:
             raise ValueError("Choose one of match_result, test_shortlist, or ranked_guests.")
         if self.story_ids is not None and (self.match_result is not None or self.test_shortlist):
@@ -149,7 +156,10 @@ def make_panel(start):
     if start.test_shortlist:
         article_ids, guest_ids, count = test_shortlist()
         result = CompletedMatch.model_validate(matcher().match_personas(article_ids, guest_ids, count))
-    if result is not None:
+    if start.briefing_plan is not None:
+        panel = planned_panel(start.briefing_plan, start.profile, start.mode, start.minutes)
+        stage = "session_evidence"
+    elif result is not None:
         panel = matched_panel(result, start.profile, start.mode, start.minutes, model())
         stage = "session_evidence"
     else:
@@ -211,7 +221,8 @@ async def start_panel(start: Start):
         raise HTTPException(503, detail) from None
     key = uuid4()
     sessions[key] = Session(panel, touched=now)
-    return {"id": key, "sample": not start.test_shortlist and start.match_result is None and not INDEX.exists()}
+    return {"id": key, "sample": (not start.test_shortlist and start.match_result is None
+                                 and start.briefing_plan is None and not INDEX.exists())}
 
 
 def session(key):

@@ -5,7 +5,8 @@ from uuid import UUID
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field
 
-from briefing.generate import generate
+from briefing.generate import UnknownSelectedArticles, generate
+from briefing.timing import PlannedStory
 from recommender.db import connect
 from recommender.embeddings import EmbeddingError
 from recommender.recommend import NoProfileSignal, ProfileNotFound
@@ -25,20 +26,18 @@ class GenerateRequest(BaseModel):
     mode: Literal["presenter", "debate"] = "presenter"
     focus: str | None = Field(default=None, min_length=2, max_length=500,
                               description="The focus the list was made with, so added articles respect it.")
-
-
-class Segment(BaseModel):
-    article_ids: list[str]
-    estimated_seconds: int
+    days: int | None = Field(default=None, ge=1, le=365)
+    excluded_article_ids: list[str] = Field(default_factory=list, max_length=500)
 
 
 class GeneratePlan(BaseModel):
     article_ids: list[str] = Field(description="Final articles, story by story.")
+    profile: str
     persona_ids: list[str] = Field(description="Every persona, ordered by the listener's preferences.")
     hosts: list[str] = Field(description="1 (presenter) or 2 (debate) personas, our order minus the matcher's vetoes.")
     hosts_from_matcher: bool
     tones: dict[str, str] = Field(description="Tone per article from the matcher (empty if it failed).")
-    segments: list[Segment]
+    segments: list[PlannedStory]
     estimated_minutes: float
     requested_minutes: float
     dropped_article_ids: list[str]
@@ -54,10 +53,11 @@ def generate_briefing(body: GenerateRequest, request: Request) -> GeneratePlan:
     try:
         with connect() as conn:
             return GeneratePlan(**generate(conn, str(body.user_id), body.article_ids, body.selected_article_ids,
-                                           body.minutes, body.mode, body.focus))
+                                           body.minutes, body.mode, body.focus, days=body.days,
+                                           excluded_article_ids=body.excluded_article_ids))
     except ProfileNotFound:
         raise HTTPException(status_code=404, detail="No profile with that user_id.") from None
-    except NoProfileSignal as err:
+    except (NoProfileSignal, UnknownSelectedArticles) as err:
         raise HTTPException(status_code=422, detail=str(err)) from None
     except (EmbeddingError, URLError, TimeoutError):
         raise HTTPException(status_code=502, detail="Could not create an embedding.") from None
