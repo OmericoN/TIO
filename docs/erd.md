@@ -82,8 +82,6 @@ erDiagram
         text description
         text personality_md "NOT NULL"
         text system_prompt
-        persona_tone tone "NOT NULL"
-        persona_tone_arr secondary_tones
         text target_audience
         text_arr expertise_topics
         smallint formality "1-5"

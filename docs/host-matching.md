@@ -13,7 +13,7 @@ result = matcher.match_personas(article_ids, candidate_agent_ids, n=2)
 
 `result["articles"]` preserves the input sequence and pairs each `article_id` with its `desired_tone` for scripting. `result["agent_ids"]` lists suitable hosts in preference order. Check its length before starting a two-host debate. Unknown IDs raise `ValueError`. A failed OpenAI request or unusable decision raises `MatchProcessingError`.
 
-Look up an article's delivery guidance with `config["article_tones"][desired_tone]`. Use `config["persona_tones"]` for the database values in a host's `tone` and `secondary_tones`. Both mappings live in the root [tones.json](../tones.json).
+Look up each article’s delivery guidance in the root [tones.json](../tones.json). Pass the matcher’s returned article list as `TurnContext.article_tones` when preparing a discussion turn.
 
 Enable INFO logging for `research.openai_client` to collect token usage by stage and model. For a cost estimate, sum input, cached input, and output at their respective rates, subtracting cached tokens from total input before pricing uncached input. Scale classification by distinct uncached articles and ranking by conversations for the 10× projection.
 

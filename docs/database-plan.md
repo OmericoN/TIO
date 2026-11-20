@@ -20,7 +20,6 @@ Decisions confirmed with the user:
 ## Enums
 - `lang_code`: `en`, `de`, `nl`
 - `experience_level`: `none`, `beginner`, `intermediate`, `professional`
-- `persona_tone`: `formal`, `conversational`, `energetic`, `calm`, `witty`, `analytical`, `authoritative`
 - `episode_status`: `queued`, `scripting`, `synthesizing`, `ready`, `failed`
 - `interaction_type`: `impression`, `played`, `completed`, `skipped`, `liked`, `disliked`, `source_opened`, `shared`
 - `preference_source`: `explicit` (onboarding) and `implicit` (learned)
@@ -75,7 +74,7 @@ User embedding (also on `profiles`, all nullable):
 **`agent_personas`**
 - `id uuid PK`, `slug text unique`, `name`, `tagline` (one-line pitch shown on the persona picker, for example "Your no-nonsense FX desk analyst"), `description`
 - `personality_md text`: the full persona markdown
-- `system_prompt text` (generated from or alongside the markdown), `tone persona_tone`, `secondary_tones persona_tone[]`
+- `system_prompt text` (generated from or alongside the markdown)
 - (No language fields: the episode language comes from the user's `preferred_language` and is stored on `episodes.language`. Any persona can speak any language.)
 - `target_audience text`, `expertise_topics text[]` (category codes), `formality smallint 1–5`, `humor_level smallint 1–5`, `pace_wpm smallint` (speaking rate)
 - `catchphrases text[]`, `do_rules text[]`, `dont_rules text[]`, `intro_template`, `outro_template`

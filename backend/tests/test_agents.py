@@ -14,6 +14,7 @@ class AgentTurnTest(unittest.TestCase):
         context = TurnContext(
             headline="Sample data release",
             headline_article_id="sample-1",
+            article_tones=[{"article_id": "sample-1", "desired_tone": "serious"}],
             listener_preferences="Explain economic terms in plain English.",
             question="What does this measure?",
             recent_turns=[prior_turn],
@@ -27,7 +28,7 @@ class AgentTurnTest(unittest.TestCase):
         self.assertEqual(reply.persona.id, ids["economy"])
         self.assertIn("observed change", first.instructions)
         self.assertIn("central bank decisions", reply.instructions)
-        self.assertIn('"tone":"conversational"', reply.instructions)
+        self.assertIn("desired_tone", reply.instructions)
         self.assertIn("exact quote", reply.instructions)
         self.assertNotIn("Sample data release", reply.instructions)
         self.assertNotIn("What does this measure?", reply.instructions)
