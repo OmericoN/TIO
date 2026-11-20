@@ -298,7 +298,7 @@ async def produce_segment(key, step, progress=None):
                 "guests": [panel.personas[i].name for i in panel.roster], "story": panel.story.headline,
                 "text": turn.text, "sources": cards, "audio": audio}
     except (ValueError, RuntimeError, OSError) as exc:
-        log.warning("Panel turn failed: %s", type(exc).__name__)
+        log.warning("Panel turn failed: %s: %s", type(exc).__name__, exc)
         raise HTTPException(502, "Turn unavailable. Check model and speaker voice settings.") from None
     finally:
         if item.generation == step.generation:

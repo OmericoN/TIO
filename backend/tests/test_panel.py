@@ -11,7 +11,7 @@ from fastapi import HTTPException
 
 from api import panel as api
 from discussion.costs import project
-from discussion.panel import Citation, EvidenceReview, Finding, Panel, SpokenCitation, Turn, Verdict, evidence, passages, review_event
+from discussion.panel import Citation, EvidenceReview, Finding, Panel, SpokenCitation, Turn, Verdict, evidence, passages, review_event, spoken_claim
 from discussion.personas import load_starter_personas
 from discussion.stories import Group, Groups, group_articles, load_index
 
@@ -83,10 +83,21 @@ class PanelTest(unittest.TestCase):
         turn = line("The report puts growth at 6%.", citations=[cite])
         cards = evidence(turn, story, passages(story, "revenue"))
         self.assertEqual((cards[0]["language"], cards[0]["id"]), ("de", report.id))
+        loose = cite.model_copy(update={"quote": "  ".join(report.body.split())})  # spacing differs from the source
+        self.assertEqual(evidence(line("The report puts growth at 6%.", citations=[loose]), story,
+                                  passages(story, "revenue"))[0]["quote"], report.body)
         for invalid in [line("Revenue rose 16%.", citations=[cite]),
                         line("It was 6%.", citations=[cite.model_copy(update={"article_id": articles[0].id})])]:
             with self.assertRaises(ValueError):
                 evidence(invalid, story, passages(story, ""))
+
+    def test_reworded_claim_maps_to_its_sentence_but_needs_its_numbers(self):
+        text = "The company said the loss was 20 cents a share. Net sales rose to $6.2 million."
+        self.assertEqual(spoken_claim("the loss narrowed to 20 cents per share", text),
+                         "The company said the loss was 20 cents a share.")
+        self.assertIsNone(spoken_claim("the loss was 30 cents per share", text))
+        self.assertIsNone(spoken_claim("margins improved sharply this year", text))
+        self.assertEqual(spoken_claim("Net sales rose", text), "Net sales rose")
 
     def test_repair_once_and_withhold_unsupported_interpretation(self):
         panel = fixture()
@@ -115,6 +126,41 @@ class PanelTest(unittest.TestCase):
             self.assertEqual(review_event("test", rows).findings, [finding])
             review_event("test", rows)
             self.assertEqual(provider.return_value.generate.call_count, 2)
+
+    def test_quote_matches_despite_quote_marks_and_spacing_and_keeps_source_text(self):
+        review_event.cache_clear()
+        self.addCleanup(review_event.cache_clear)
+        source = "The bank said it “won’t  raise\nrates” this year."
+        rows = json.dumps([{"id": "a", "passages": [source]}])
+        loose = Finding(point="Rates", status="reported",
+                        citations=[Citation(article_id="a", quote='it "won\'t raise rates"')])
+        with patch("discussion.panel.model") as provider:
+            provider.return_value.generate.return_value = EvidenceReview(findings=[loose])
+            [kept] = review_event("test", rows).findings
+        self.assertEqual(kept.citations[0].quote, "it “won’t  raise\nrates”")
+
+    def test_untraceable_finding_is_dropped_and_the_rest_kept(self):
+        review_event.cache_clear()
+        self.addCleanup(review_event.cache_clear)
+        rows = json.dumps([{"id": "a", "passages": ["Revenue rose 5% in March."]}])
+        good = Finding(point="Revenue", status="reported", citations=[Citation(article_id="a", quote="Revenue rose 5%")])
+        bad = Finding(point="Profit", status="reported", citations=[Citation(article_id="a", quote="Profit doubled")])
+        with patch("discussion.panel.model") as provider:
+            provider.return_value.generate.return_value = EvidenceReview(findings=[bad, good])
+            with self.assertLogs("discussion.panel", level="WARNING") as logs:
+                self.assertEqual(review_event("test", rows).findings, [good])
+        self.assertIn("Profit doubled", logs.output[0])
+
+    def test_story_fails_only_when_no_finding_is_traceable(self):
+        review_event.cache_clear()
+        self.addCleanup(review_event.cache_clear)
+        rows = json.dumps([{"id": "a", "passages": ["Revenue rose 5% in March."]}])
+        bad = Finding(point="Profit", status="reported", citations=[Citation(article_id="a", quote="Profit doubled")])
+        with patch("discussion.panel.model") as provider:
+            provider.return_value.generate.return_value = EvidenceReview(findings=[bad])
+            with self.assertLogs("discussion.panel", level="WARNING"), \
+                    self.assertRaisesRegex(ValueError, "no traceable findings \\(untraceable citation\\)"):
+                review_event("test", rows)
 
     def test_skipped_words_do_not_enter_history(self):
         panel = fixture()
