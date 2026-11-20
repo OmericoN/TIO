@@ -2,7 +2,7 @@
 
 import psycopg
 
-from research.config import DATABASE_URL
+from recommender.config import DATABASE_URL
 
 
 def connect() -> psycopg.Connection:

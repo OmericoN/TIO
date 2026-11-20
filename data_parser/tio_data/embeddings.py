@@ -11,7 +11,7 @@ import time
 import urllib.error
 import urllib.request
 
-from tio_data.config import EMBED_DIM, EMBED_MODEL, OPENAI_API_KEY
+from tio_data.config import EMBED_DIM, EMBED_MODEL, OPENAI_EMBEDDINGS_API_KEY
 
 OPENAI_EMBEDDINGS_URL = "https://api.openai.com/v1/embeddings"
 MAX_BATCH = 256          # inputs per request; OpenAI allows 2,048 but smaller batches retry cheaply
@@ -20,7 +20,7 @@ RETRIES = 5
 
 
 class OpenAIEmbedder:
-    def __init__(self, api_key: str = OPENAI_API_KEY, model: str = EMBED_MODEL, dim: int = EMBED_DIM,
+    def __init__(self, api_key: str = OPENAI_EMBEDDINGS_API_KEY, model: str = EMBED_MODEL, dim: int = EMBED_DIM,
                  timeout: float = 120):
         self.api_key = api_key
         self.model = model
@@ -42,7 +42,7 @@ class OpenAIEmbedder:
 
     def _request(self, texts: list[str]) -> list[list[float]]:
         if not self.api_key.startswith("sk-"):
-            raise RuntimeError("OPENAI_API_KEY in .env is not an OpenAI API key (it should start with 'sk-'). "
+            raise RuntimeError("OPENAI_EMBEDDINGS_API_KEY in .env is not an OpenAI API key (it should start with 'sk-'). "
                                "Create one at https://platform.openai.com/api-keys.")
         body = json.dumps({"model": self.model, "input": texts, "dimensions": self.dim}).encode("utf-8")
         for attempt in range(RETRIES):
