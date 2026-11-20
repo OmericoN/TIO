@@ -1,0 +1,119 @@
+"""Embedding jobs: read from Supabase, embed with Ollama, write the vectors back.
+
+Articles: "headline + excerpt", or "headline + summary" once an LLM summary exists.
+Users: onboarding vector (interests_text), behavior vector (articles they interacted with), or a hybrid.
+"""
+
+import time
+
+from tio_data.db import connect
+from tio_data.embeddings import OllamaEmbedder, from_pgvector, normalize, to_pgvector, weighted_average
+
+# How much each interaction pulls a user's taste vector toward (or away from) an article.
+INTERACTION_WEIGHTS = {
+    "impression": 0.0,
+    "played": 0.5,
+    "completed": 1.0,
+    "liked": 1.5,
+    "shared": 1.0,
+    "source_opened": 0.5,
+    "skipped": -0.5,
+    "disliked": -1.0,
+}
+BEHAVIOR_SHARE = 0.5          # weight of behavior vs. onboarding in a hybrid
+BEHAVIOR_LOOKBACK_DAYS = 60
+
+
+def check(embedder: OllamaEmbedder) -> None:
+    vector = embedder.embed_queries(["ECB interest rate decision"])[0]
+    print(f"Ollama OK at {embedder.base_url}: {embedder.model} returns {len(vector)} dimensions.")
+
+
+def _article_text(headline: str, excerpt: str, summary: str | None) -> tuple[str, str]:
+    if summary and summary.strip():
+        return f"{headline}\n\n{summary.strip()}", "summary"
+    return f"{headline}\n\n{(excerpt or '').strip()}", "excerpt"
+
+
+def embed_articles(embedder: OllamaEmbedder, batch_size: int = 32, force: bool = False,
+                   limit: int | None = None) -> None:
+    # Without --force: articles with no embedding, or whose summary appeared after they were embedded.
+    where = "true" if force else (
+        "summary_embedding is null "
+        "or (nullif(trim(summary), '') is not null and embedding_source is distinct from 'summary')"
+    )
+    sql = f"select id, headline, excerpt, summary from public.articles where {where} order by published_at desc"
+    if limit:
+        sql += f" limit {int(limit)}"
+
+    with connect() as conn:
+        rows = conn.execute(sql).fetchall()
+        if not rows:
+            print("All articles already have an up-to-date embedding.")
+            return
+        print(f"Embedding {len(rows)} articles with {embedder.model}...")
+
+        started, done = time.monotonic(), 0
+        for start in range(0, len(rows), batch_size):
+            batch = rows[start:start + batch_size]
+            texts, sources = zip(*(_article_text(h, e, s) for _, h, e, s in batch))
+            vectors = embedder.embed_documents(list(texts))
+            with conn.cursor() as cur:
+                cur.executemany(
+                    "update public.articles set summary_embedding = %s::extensions.vector, embedding_source = %s, "
+                    "embedding_model = %s, embedded_at = now() where id = %s",
+                    [(to_pgvector(v), src, embedder.model, row[0]) for row, v, src in zip(batch, vectors, sources)],
+                )
+            conn.commit()  # per batch, so an interrupted run resumes where it stopped
+            done += len(batch)
+            print(f"  {done}/{len(rows)}  ({done / max(time.monotonic() - started, 1e-6):.1f}/s)")
+    print("Done.")
+
+
+def _behavior_vector(conn, user_id) -> list[float] | None:
+    rows = conn.execute(
+        """
+        select i.type::text, a.summary_embedding::text
+        from public.user_article_interactions i
+        join public.articles a on a.id = i.article_id
+        where i.user_id = %s
+          and a.summary_embedding is not null
+          and i.created_at >= now() - make_interval(days => %s)
+        """,
+        (user_id, BEHAVIOR_LOOKBACK_DAYS),
+    ).fetchall()
+    pairs = [(from_pgvector(emb), INTERACTION_WEIGHTS.get(kind, 0.0)) for kind, emb in rows]
+    pairs = [(v, w) for v, w in pairs if w]
+    return weighted_average([v for v, _ in pairs], [w for _, w in pairs])
+
+
+def embed_users(embedder: OllamaEmbedder) -> None:
+    with connect() as conn:
+        users = conn.execute("select id, interests_text from public.profiles order by created_at").fetchall()
+        updated = skipped = 0
+        for user_id, interests in users:
+            onboarding = embedder.embed_queries([interests.strip()])[0] if interests and interests.strip() else None
+            behavior = _behavior_vector(conn, user_id)
+
+            if onboarding and behavior:
+                vector = normalize([(1 - BEHAVIOR_SHARE) * o + BEHAVIOR_SHARE * b
+                                    for o, b in zip(normalize(onboarding), behavior)])
+                source = "hybrid"
+            elif onboarding:
+                vector, source = onboarding, "onboarding"
+            elif behavior:
+                vector, source = behavior, "behavior"
+            else:
+                skipped += 1
+                continue
+
+            conn.execute(
+                "update public.profiles set interest_embedding = %s::extensions.vector, "
+                "interest_embedding_source = %s, interest_embedding_model = %s, interest_embedded_at = now() "
+                "where id = %s",
+                (to_pgvector(vector), source, embedder.model, user_id),
+            )
+            conn.commit()
+            updated += 1
+            print(f"  {user_id}: {source}")
+    print(f"Updated {updated} users. Skipped {skipped} with no interests text and no interactions yet.")
