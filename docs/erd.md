@@ -99,6 +99,10 @@ erDiagram
         text llm_model
         real temperature
         smallint max_episode_minutes
+        vector1536 embedding "text-embedding-3-large"
+        text embedding_source
+        text embedding_model
+        timestamptz embedded_at
     }
 
     PUBLISHERS {

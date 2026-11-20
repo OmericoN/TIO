@@ -85,6 +85,44 @@ def embed_articles(embedder: OpenAIEmbedder, batch_size: int = 128, force: bool 
     print("Done.")
 
 
+def persona_text(expertise_topics, target_audience, description, tagline) -> str:
+    """What a host covers and who it is for. Delivery style (personality_md, humor, formality, rules) is left out:
+    it would dominate the vector and match no article; the LLM matcher judges style instead."""
+    lines = []
+    if expertise_topics:
+        lines.append("Covers: " + ", ".join(t.lower() for t in expertise_topics) + ".")
+    if target_audience and target_audience.strip():
+        lines.append(f"For: {target_audience.strip()}")
+    for text in (description, tagline):
+        if text and text.strip():
+            lines.append(text.strip())
+    return "\n".join(lines)
+
+
+def embed_personas(embedder: OpenAIEmbedder, force: bool = False) -> None:
+    where = "true" if force else "embedding is null or embedding_model is distinct from %(model)s"
+    with connect() as conn:
+        rows = conn.execute(
+            f"select id, slug, expertise_topics, target_audience, description, tagline "
+            f"from public.agent_personas where {where} order by slug",
+            {"model": embedder.model},
+        ).fetchall()
+        rows = [(pid, slug, persona_text(*fields)) for pid, slug, *fields in rows]
+        rows = [r for r in rows if r[2]]
+        if not rows:
+            print("All personas already have an up-to-date embedding.")
+            return
+        vectors = embedder.embed_documents([text for _, _, text in rows])
+        with conn.cursor() as cur:
+            cur.executemany(
+                "update public.agent_personas set embedding = %s::extensions.vector, "
+                "embedding_source = 'expertise_audience', embedding_model = %s, embedded_at = now() where id = %s",
+                [(to_pgvector(v), embedder.model, pid) for (pid, _, _), v in zip(rows, vectors)],
+            )
+        conn.commit()
+    print(f"Embedded {len(rows)} personas: {', '.join(slug for _, slug, _ in rows)}")
+
+
 def _behavior_vector(conn, user_id) -> list[float] | None:
     rows = conn.execute(
         """

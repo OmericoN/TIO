@@ -81,6 +81,8 @@ User embedding (also on `profiles`, all nullable):
 - `catchphrases text[]`, `do_rules text[]`, `dont_rules text[]`, `intro_template`, `outro_template`
 - Voice/TTS: `voice_provider`, `voice_id`, `voice_settings jsonb`
 - LLM: `llm_model text`, `temperature real`, `max_episode_minutes smallint`
+- Embedding (all nullable): `embedding vector(1536)` (OpenAI `text-embedding-3-large`, comparable with article and profile vectors), `embedding_source text` (which text was embedded), `embedding_model text`, `embedded_at timestamptz`. Migration `20261120230000_persona_embeddings.sql`.
+- What is embedded (`embedding_source = 'expertise_audience'`, `tio_data embed personas`): `expertise_topics`, `target_audience`, `description` and `tagline`, i.e. what the host covers and who it is for. Article and listener vectors are about topics, so the persona vector must be too. `name`, `personality_md`, `humor_level`, `formality` and the rules are left out: they describe delivery style, would dominate the vector and match no article. Style fit is judged by the LLM matcher (`backend/research/matcher.py`).
 
 ## 3. News
 Every data point in the JSONL files maps to a column. `publication` and `publisher` are normalised into their own tables because only 6 distinct values exist.
