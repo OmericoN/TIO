@@ -1,0 +1,29 @@
+const icons = {
+  signal: 'M3 10v4m4-8v12m5-16v20m5-17v14m4-10v6',
+  feed: 'M3 5h18v14H3z M7 9h4v6H7z M14 9h3m-3 3h3m-3 3h3',
+  discussion: 'M3 11a9 9 0 0 1 18 0v5a2 2 0 0 1-2 2h-2v-7h4 M3 11h4v7H5a2 2 0 0 1-2-2z',
+  voice: 'M9 6a3 3 0 1 1 6 0v5a3 3 0 1 1-6 0z M5 10v1a7 7 0 0 0 14 0v-1m-7 8v3m-3 0h6',
+  arrow: 'M4 12h15m-6-6 6 6-6 6',
+  list: 'M8 6h12M8 12h12M8 18h12M4 6h.01M4 12h.01M4 18h.01',
+  search: 'M16.5 16.5 21 21 M18 10.5a7.5 7.5 0 1 1-15 0 7.5 7.5 0 0 1 15 0Z',
+}
+
+export function Icon({ name }: { name: keyof typeof icons }) {
+  return <svg className="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.65" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d={icons[name]} /></svg>
+}
+
+export function Brand() {
+  return <span className="brand"><span className="brand-mark"><Icon name="signal" /></span>TIO</span>
+}
+
+// Each line interpolates between two curves to give the audio ribbon its twist.
+export function AudioRibbon() {
+  return <svg className="audio-ribbon" viewBox="0 0 700 300" preserveAspectRatio="none" fill="none" aria-hidden="true">
+    {Array.from({ length: 72 }, (_, index) => {
+      const t = index / 71
+      const arch = Math.sin(t * Math.PI)
+      const path = `M-22 ${175 + 15*t} C85 ${175 + 42*t}, 115 ${25 - 46*arch}, 225 ${78 + 110*t} S370 ${275 + 20*arch - 140*t}, 450 ${204 - 109*t} S588 ${25 + 28*t - 40*arch}, 725 ${125 + 40*t}`
+      return <path key={index} d={path} stroke="currentColor" strokeWidth={0.85} opacity={0.42 + 0.54 * arch} />
+    })}
+  </svg>
+}

@@ -29,6 +29,21 @@ def line(text="Let's hear from the panel.", action="respond", citations=(), hand
 
 
 class PanelTest(unittest.TestCase):
+    def test_swiped_lineup_is_exact_and_ordered(self):
+        stories = fixture().stories
+        ids = [story.id for story in reversed(stories)]
+        with patch.object(api, "news_events", return_value=stories), patch.object(api, "INDEX") as index, \
+                patch.object(api, "review_event"), patch.object(api, "model"), patch.object(api, "select_stories") as rank:
+            index.exists.return_value = False
+            for selected in (ids, ids[:1]):
+                panel = api.make_panel(api.Start(profile="A wildcard listener", story_ids=selected))
+                self.assertEqual([s.id for s in panel.stories], selected)
+            rank.assert_not_called()
+            for invalid in ([ids[0], ids[0]], ["missing"]):
+                with self.assertRaises(HTTPException) as caught:
+                    api.make_panel(api.Start(profile="A listener", story_ids=invalid))
+                self.assertEqual(caught.exception.status_code, 422)
+
     def test_multilingual_event_and_quantity_checks(self):
         panel = fixture()
         articles = panel.story.articles

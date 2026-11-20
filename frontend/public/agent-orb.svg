@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 240" fill="none">
+  <defs>
+    <radialGradient id="shell" cx=".34" cy=".23" r=".83" gradientUnits="objectBoundingBox">
+      <stop stop-color="#eff0bb" stop-opacity=".92"/><stop offset=".25" stop-color="#a3b085" stop-opacity=".8"/>
+      <stop offset=".58" stop-color="#384f41"/><stop offset=".8" stop-color="#263b32"/><stop offset=".94" stop-color="#829580"/><stop offset="1" stop-color="#d9ddb4"/>
+    </radialGradient>
+    <linearGradient id="rim" x1="0" y1="0" x2=".84" y2="1" gradientUnits="objectBoundingBox">
+      <stop stop-color="#ffffdd"/><stop offset=".29" stop-color="#c4cb94" stop-opacity=".33"/><stop offset=".55" stop-color="#344f42" stop-opacity=".5"/><stop offset=".82" stop-color="#e1dbab"/><stop offset="1" stop-color="#6a8068"/>
+    </linearGradient>
+    <radialGradient id="fold" cx=".68" cy=".64" r=".74">
+      <stop stop-color="#263f32" stop-opacity=".8"/><stop offset=".48" stop-color="#798f6d" stop-opacity=".55"/><stop offset=".75" stop-color="#bbc9a1" stop-opacity=".8"/><stop offset=".94" stop-color="#f4f2c0"/><stop offset="1" stop-color="#b2bd89"/>
+    </radialGradient>
+    <linearGradient id="light" x1=".3" y1="0" x2=".65" y2="1">
+      <stop stop-color="#ffffdc" stop-opacity=".98"/><stop offset=".35" stop-color="#e8e7a3" stop-opacity=".27"/><stop offset=".7" stop-color="#344a38" stop-opacity=".33"/><stop offset="1" stop-color="#f3efbc"/>
+    </linearGradient>
+    <filter id="soft"><feGaussianBlur stdDeviation="2.4"/></filter>
+  </defs>
+  <path d="M47 46C67 15 133 7 173 22c37 14 48 51 49 89 4 46-12 86-48 106-32 18-90 10-123-18C20 173 9 132 17 96c4-21 15-37 30-50Z" fill="url(#shell)" stroke="url(#rim)" stroke-width="2"/>
+  <path d="M49 45C73 14 141 10 170 26c14 8 19 18 17 32-21-25-43-15-62 3-23 20-42 22-64 14-20-7-27-10-12-30Z" fill="url(#light)"/>
+  <style>
+    @media (prefers-reduced-motion: no-preference) {
+      .membrane { transform-origin: 120px 120px; animation: drift 6s ease-in-out infinite alternate; }
+      @keyframes drift { from { transform: rotate(-5deg) scale(.97, 1); } to { transform: rotate(7deg) scale(1.025, .96); } }
+    }
+  </style>
+  <g class="membrane">
+  <path d="M33 127c-5-25 22-43 46-53 30-12 47-34 73-34 27-1 45 24 43 49-3 21-17 32-13 55 7 31-5 52-29 60-28 9-56 3-78-15-26-21-37-41-42-62Z" fill="url(#fold)" stroke="url(#rim)" stroke-width="2.2"/>
+  <path d="M44 142c-12-25-9-39 9-54 17-14 47-14 63-27 21-17 40-18 57-10-26-1-40 16-48 31-14 23-17 64-6 91 6 15 20 27 37 31-28 8-63-5-77-26-17-26-5-57-20-61-10-3-15 9-15 25Z" fill="url(#light)"/>
+  <path d="M131 72c19-19 38-28 52-14m-70 124c14 16 26 22 46 21" stroke="#ffffcf" stroke-width="5" stroke-linecap="round" filter="url(#soft)" opacity=".72"/>
+  </g>
+  <path d="M32 82c-17 40-4 85 27 112 30 27 86 39 126 10" stroke="url(#rim)" stroke-width="3" opacity=".78"/>
+</svg>

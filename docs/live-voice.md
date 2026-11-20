@@ -40,7 +40,7 @@ cd backend
 uv run --locked uvicorn main:app --reload
 ```
 
-Start Vite using the [local setup](../README.md#run-locally), then click **Start voice preview** in the local app and allow microphone access. To check the backend alone, run the following in a second terminal. It prints whether the token, conversation ID, and prompt are present.
+The workspace opens agent discussions from the host orb in the news feed. To check the standalone backend preview route, run the following in a second terminal. It prints whether the token, conversation ID, and prompt are present.
 
 ```powershell
 $session = Invoke-RestMethod -Method Post -Uri http://127.0.0.1:8000/api/voice/session

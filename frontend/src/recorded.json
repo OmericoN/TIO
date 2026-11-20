@@ -1,0 +1,12 @@
+{
+  "sample-revenue": [
+    {"speaker":"Main Host","file":"revenue-open","text":"First, Aster Works reports quarterly revenue growth. Markets Specialist, why do the figures differ?"},
+    {"speaker":"Markets Specialist","file":"revenue-markets","text":"Sample Markets puts growth at eight percent for continuing operations. The German report gives six percent across all operations. These figures cover different parts of the business."},
+    {"speaker":"Main Host","file":"revenue-handoff","text":"Economy Specialist, do the reports agree when they cover the same operations?"},
+    {"speaker":"Economy Specialist","file":"revenue-economy","text":"No. For all operations, the Dutch report estimates seven percent, while the German report gives six. The available reports leave that difference unresolved."}
+  ],
+  "sample-rates": [
+    {"speaker":"Main Host","file":"rates-open","text":"Now to the Aster Reserve decision. Economy Specialist, what did the reserve decide?"},
+    {"speaker":"Economy Specialist","file":"rates-economy","text":"The reserve held its policy rate at three percent. Both the English and Dutch reports give the same rate."}
+  ]
+}

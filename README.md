@@ -16,7 +16,7 @@ The [full project brief](docs/project-brief.md) records the judging criteria, de
 - **Tailor the briefing.** Choose the stories, order, and depth for each listener profile. Choose presenter or two-host debate mode independently of the profile.
 - **Show the evidence as you listen.** Link every spoken claim and number to its source article. Show the supporting article and excerpt for the active segment, and flag conflicts between sources.
 
-After signing in, open **Discussion** for a briefing with a main host and up to two recommended guest experts. The player shows the active segment’s cited passages and accepts spoken or typed questions. Open **Live host** for the standalone voice preview. See the [panel engine guide](docs/panel-engine.md) for provider setup, source indexing and cost measurement.
+In **News feed**, swipe right to include a headline or left to skip it. The Include and Skip buttons also work with a keyboard. Select up to six headlines, then tap the host orb beside the dock. The host introduces the panel, and each speaker’s audio appears alongside its supporting sources. **Briefings** keeps the conversation, citations and audio in this browser for replay or deletion. The fictional recorded edition works without provider credentials. With a configured backend, use **Briefing settings** for a live listener profile, format and duration. See the [panel engine guide](docs/panel-engine.md) for provider setup and cost measurement.
 
 ## Run locally
 
@@ -40,7 +40,7 @@ Open the URL Vite prints, usually [http://localhost:5173](http://localhost:5173)
 
 For a local demo, select **Open demo in a new tab** on the sign-in screen or open [the demo workspace](http://localhost:5173/demo) directly. Demo access is available on localhost with the Vite development server.
 
-Both servers can start without provider credentials. To use **Start voice preview**, configure `ELEVENLABS_API_KEY` and `ELEVENLABS_AGENT_ID` in the backend environment, enable the agent's **System prompt** override, and allow microphone access. See the [voice preview setup](docs/live-voice.md#test-the-existing-elevenagents-preview) for the full steps.
+Both servers can start without provider credentials. For generated discussions, configure the model and speaker voices in the [panel engine guide](docs/panel-engine.md). Typed questions and optional microphone input are available during generated sessions. Remove any locally saved licensed briefings after the hackathon.
 
 ## Guides
 

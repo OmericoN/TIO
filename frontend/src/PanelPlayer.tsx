@@ -1,14 +1,16 @@
 import { CommitStrategy, useScribe } from '@elevenlabs/react'
-import { useEffect, useRef, useState } from 'react'
-
-type Card = { id: string; publisher: string; language: string; url: string | null; quote: string; claim: string }
-type Segment = { id: string; story: string; speaker: string; text: string; sources: Card[]; audio: string }
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import type { CSSProperties } from 'react'
+import { AgentStage } from './AgentStage'
+import { Sources } from './BriefingHistory'
+import { audioUrl, historyStore, recordedTurns } from './briefings'
+import type { Briefing, Entry, Headline, Preferences, Segment } from './briefings'
 
 async function post<T>(url: string, body = {}): Promise<T> {
   const response = await fetch('/api/panel' + url, {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
   })
-  if (!response.ok) throw new Error((await response.json()).detail || 'Panel request failed.')
+  if (!response.ok) throw new Error((await response.json().catch(() => null))?.detail || 'Panel unavailable. Check the backend connection.')
   return response.json()
 }
 
@@ -35,15 +37,29 @@ async function streamTurn(id: string, body: object, status: (value: string) => v
   } finally { reader.releaseLock() }
 }
 
-export function PanelPlayer() {
-  const [profile, setProfile] = useState('Explain what changed and why it matters to a general news listener.')
-  const [mode, setMode] = useState('panel')
-  const [minutes, setMinutes] = useState(4)
-  const [running, setRunning] = useState(false)
-  const [status, setStatus] = useState('')
+type Props = {
+  owner: string
+  stories: Headline[]
+  preferences: Preferences
+  recorded: boolean
+  origin: { x: number; y: number; context: AudioContext | null }
+  onClose: () => void
+}
+
+export function PanelPlayer({ owner, stories, preferences, recorded, origin, onClose }: Props) {
+  const [running, setRunning] = useState(true)
+  const [status, setStatus] = useState('Opening your briefing…')
   const [active, setActive] = useState<Segment | null>(null)
-  const [archive, setArchive] = useState<Segment[]>([])
-  const [sample, setSample] = useState(false)
+  const [sample, setSample] = useState(recorded)
+  const [speaker, setSpeaker] = useState('')
+  const [host, setHost] = useState('Main Host')
+  const [guests, setGuests] = useState<string[]>([])
+  const [saveError, setSaveError] = useState(false)
+  const [record] = useState<Briefing>(() => ({ id: crypto.randomUUID(), date: new Date().toISOString(), titles: stories.map(s => s.title), entries: [], sample: recorded }))
+  const sampleQueue = useRef<Segment[]>([])
+  const previousStory = useRef('')
+  const dialog = useRef<HTMLDialogElement>(null)
+  const consolePanel = useRef<HTMLDivElement>(null)
   const [question, setQuestion] = useState('')
   const player = useRef<HTMLAudioElement>(null)
   const session = useRef('')
@@ -52,7 +68,26 @@ export function PanelPlayer() {
   const pendingInterrupt = useRef<Promise<unknown> | null>(null)
   const current = useRef<Segment | null>(null)
   const finished = useRef<{ heard: string; seconds: number; fully_heard: boolean } | null>(null)
-  const button = 'rounded-lg bg-[#263a33] px-3.5 py-2 text-sm font-medium text-white hover:bg-[#354c42] disabled:opacity-50'
+
+  useEffect(() => { consolePanel.current?.scrollTo(0, 0) }, [active?.id])
+
+  function save(entry: Entry) {
+    if (record.entries.some(e => e.id === entry.id)) return
+    record.entries.push(entry)
+    void historyStore(owner, { ...record, entries: [...record.entries] }).catch(() => setSaveError(true))
+  }
+
+  function introduce() {
+    const line = current.current, audio = player.current
+    if (!line || !audio || audio.paused) return
+    const spoken = Number.isFinite(audio.duration) ? audio.currentTime / audio.duration : 0
+    const appearing = line.guests.filter(name => {
+      if (line.speaker === name) return true
+      const at = line.text.toLowerCase().indexOf(name.toLowerCase())
+      return at >= 0 && spoken >= at / line.text.length
+    })
+    if (appearing.length) setGuests(names => appearing.every(n => names.includes(n)) ? names : [...new Set([...names, ...appearing])])
+  }
 
   function show(segment: Segment | null) {
     current.current = segment
@@ -66,8 +101,18 @@ export function PanelPlayer() {
       audio.load()
       return
     }
-    audio.src = 'data:audio/mpeg;base64,' + segment.audio
-    void audio.play().catch(() => { if (current.current === segment) setStatus('Press play to listen.') })
+    setHost(segment.host)
+    if (previousStory.current !== segment.story) {
+      setGuests([])
+      previousStory.current = segment.story
+    }
+    audio.src = audioUrl(segment)
+    const opening = dialog.current?.getAnimations().filter(a => a.playState === 'running') ?? []
+    void Promise.allSettled(opening.map(a => a.finished)).then(() => {
+      if (current.current === segment && audio.isConnected) {
+        void audio.play().catch(() => { if (current.current === segment) setStatus('Press play to listen.') })
+      }
+    })
   }
 
   function end() {
@@ -77,6 +122,7 @@ export function PanelPlayer() {
     pendingInterrupt.current = null
     scribe.disconnect()
     show(null)
+    setSpeaker('')
     setRunning(false)
   }
 
@@ -113,6 +159,7 @@ export function PanelPlayer() {
 
   async function ask(text: string) {
     if (!text.trim() || !session.current) return
+    save({ id: crypto.randomUUID(), speaker: 'Listener', text: text.trim() })
     interrupt()
     const gen = generation.current
     try {
@@ -131,29 +178,49 @@ export function PanelPlayer() {
     onError: () => setStatus('Microphone unavailable. You can type your question.'),
   })
 
-  useEffect(() => () => {
-    generation.current++
-    player.current?.pause()
-    if (session.current) void fetch('/api/panel/' + session.current, { method: 'DELETE' }).catch(() => {})
-    session.current = ''
+  useLayoutEffect(() => {
+    const modal = dialog.current!
+    modal.showModal()
+    const before = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+    return () => { modal.close(); document.body.style.overflow = before }
   }, [])
+
+  useEffect(() => {
+    const audio = player.current!
+    void start()
+    return () => {
+      generation.current++
+      audio.pause()
+      scribe.disconnect()
+      if (session.current) void fetch('/api/panel/' + session.current, { method: 'DELETE' }).catch(() => {})
+      session.current = ''
+    }
+  }, [])
+
+  function advanceSample() {
+    const line = sampleQueue.current.shift()
+    if (line) { setStatus(''); show(line) }
+    else { end(); setStatus('Briefing complete.') }
+  }
 
   async function start() {
     const gen = ++generation.current
-    show(null)
-    setArchive([])
-    finished.current = null
-    setSample(false)
-    setRunning(true)
-    setStatus('Preparing the rundown…')
+    if (recorded) {
+      sampleQueue.current = recordedTurns(stories)
+      advanceSample()
+      return
+    }
+    setStatus('Preparing your selected headlines…')
     try {
-      const result = await post<{ id: string; sample: boolean }>('', { profile, mode, minutes })
+      const result = await post<{ id: string; sample: boolean }>('', { ...preferences, story_ids: stories.map(s => s.id) })
       if (generation.current !== gen) {
         await fetch('/api/panel/' + result.id, { method: 'DELETE' })
         return
       }
       session.current = result.id
       sessionStart.current = gen
+      record.sample = result.sample
       setSample(result.sample)
       await next()
     } catch (e) { if (generation.current === gen) fail(e) }
@@ -168,46 +235,44 @@ export function PanelPlayer() {
     } catch { setStatus('Could not enable the microphone. You can type your question.') }
   }
 
-  return <section className="mt-6 space-y-4">
-    <h2 className="text-xl font-semibold">Personalized audio briefing</h2>
-    <label className="block">Listener profile
-      <textarea className="block w-full rounded border p-2" value={profile} maxLength={3000}
-        disabled={running} onChange={e => setProfile(e.target.value)} />
-    </label>
-    <div className="flex flex-wrap items-center gap-3">
-      <label>Format <select disabled={running} value={mode} onChange={e => setMode(e.target.value)}>
-        <option value="panel">Expert panel</option><option value="presenter">Presenter</option>
-      </select></label>
-      <label>Minutes <input className="w-14 border" type="number" min="1" max="15" value={minutes}
-        disabled={running} onChange={e => setMinutes(Number(e.target.value))} /></label>
-      <button className={button} disabled={!running && (!profile.trim() || minutes < 1 || minutes > 15)}
-        onClick={running ? () => { end(); setStatus('Stopped.') } : start}>{running ? 'Stop' : 'Start briefing'}</button>
-    </div>
-    <p>Synthetic narration{sample ? ' · Fictional sample reporting' : ''}</p>
-    <audio ref={player} controls className="w-full" onEnded={() => {
+  return <dialog ref={dialog} className="session-glass" aria-labelledby="room-title"
+    style={{ '--launch-x': origin.x + 'px', '--launch-y': origin.y + 'px' } as CSSProperties}
+    onCancel={e => { e.preventDefault(); onClose() }}>
+    <div className="session-inner">
+      <div className="session-intro"><header className="session-heading"><div><h1 id="room-title">Your briefing</h1>
+        <p>{recorded ? 'Recorded sample' : 'Synthetic narration'}{sample ? ' · Fictional reporting' : ''}</p></div>
+        <button autoFocus onClick={onClose} className="room-close">{running ? 'End session' : 'Close'}</button>
+      </header><h2 className="session-headline">{active?.story ?? stories[0].title}</h2></div>
+      <AgentStage audio={player} origin={origin} host={host} guests={guests} speaker={speaker} />
+      <div ref={consolePanel} className="session-console">
+      <p role="status" className="player-status">{status}</p>
+      {saveError && <p role="alert">This browser could not save your briefing. Check the available device storage.</p>}
+      <audio ref={player} controls aria-label="Briefing audio" hidden={!active} className="w-full"
+        onPlaying={() => { const line = current.current; if (line) { setSpeaker(line.speaker); setStatus(''); save(line); introduce() } }}
+        onPause={() => setSpeaker('')} onTimeUpdate={introduce}
+        onError={() => { if (current.current) fail(new Error('This audio could not play. Close the session and try again.')) }} onEnded={() => {
       const heard = current.current
+      if (recorded) { advanceSample(); return }
       if (!session.current || !heard) return
       const audio = player.current!
       let seconds = 0
       for (let i = 0; i < audio.played.length; i++) seconds += audio.played.end(i) - audio.played.start(i)
       finished.current = { heard: heard.id, seconds, fully_heard: seconds >= audio.duration - 0.15 }
-      setArchive(a => [...a, heard])
       show(null)
       void next(finished.current)
     }} />
-    {active && <article><h3 className="font-semibold">{active.story}</h3><p>{active.speaker} — {active.text}</p>
-      {active.sources.map((s, i) => <blockquote key={i} className="my-2 border-l-2 pl-3">
-        <strong>{s.claim}</strong><p lang={s.language}>{s.quote}</p><footer>{s.url
-          ? <a href={s.url} target="_blank" rel="noreferrer">{s.publisher}</a> : s.publisher}</footer>
-      </blockquote>)}</article>}
-    {running && <form className="flex flex-wrap gap-2" onSubmit={e => {
+    {active && <div className="playing-segment">
+      <article><p className="topic">{active.speaker}</p><p>{active.text}</p></article>
+      <Sources cards={active.sources} />
+    </div>}
+    {running && !recorded && <form className="flex flex-wrap gap-2" onSubmit={e => {
       e.preventDefault(); void ask(question); setQuestion('')
     }}>
-      <button className={button} type="button" disabled={!session.current || scribe.status === 'connecting'}
+      <button className="button" type="button" disabled={!session.current || scribe.status === 'connecting'}
         onClick={scribe.isConnected ? scribe.disconnect : microphone}>{scribe.isConnected ? 'Disable microphone' : 'Enable microphone'}</button>
       <input className="grow rounded border p-2" aria-label="Question for the panel" placeholder="Ask the panel"
         value={question} maxLength={1000} onChange={e => setQuestion(e.target.value)} />
-      <button className={button} disabled={!question.trim() || !session.current}>Ask</button>
+      <button className="button" disabled={!question.trim() || !session.current}>Ask</button>
       {pendingInterrupt.current && <button type="button" onClick={async () => {
         const gen = generation.current
         try {
@@ -219,9 +284,7 @@ export function PanelPlayer() {
         } catch (e) { if (generation.current === gen) fail(e) }
       }}>Resume briefing</button>}
     </form>}
-    <p role="status">{status}</p>
-    {!running && archive.length > 0 && <ol>{archive.map(s => <li key={s.id}>
-      <button className="text-left underline" onClick={() => show(s)}>Replay {s.speaker} · {s.text}</button>
-    </li>)}</ol>}
-  </section>
+      </div>
+    </div>
+  </dialog>
 }

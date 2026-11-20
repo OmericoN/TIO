@@ -43,6 +43,7 @@ class Start(BaseModel):
     mode: Literal["panel", "presenter"] = "panel"
     minutes: int = Field(default=4, ge=1, le=15)
     ranked_guests: dict[str, list[UUID]] | None = None
+    story_ids: list[str] | None = Field(default=None, min_length=1, max_length=6)
 
 
 class Step(BaseModel):
@@ -67,10 +68,28 @@ sessions: dict[UUID, Session] = {}
 matcher = lru_cache(maxsize=1)(create_matcher)
 
 
+def news_events():
+    return [s for s in available_stories() if any(not a.official_release for a in s.articles)]
+
+
+@router.get("/stories")
+def feed():
+    return {"sample": not INDEX.exists(), "stories": [
+        {"id": s.id, "title": s.headline, "topic": s.articles[0].publisher,
+         "summary": " · ".join(dict.fromkeys(a.language.upper() for a in s.articles))}
+        for s in news_events()]}
+
+
 def make_panel(start):
     load_dotenv(REPO_ROOT / ".env")
-    news_events = [s for s in available_stories() if any(not a.official_release for a in s.articles)]
-    stories = select_stories(news_events, start.profile, start.minutes, model())
+    events = news_events()
+    if start.story_ids is None:
+        stories = select_stories(events, start.profile, start.minutes, model())
+    else:
+        by_id = {s.id: s for s in events}
+        if any(i not in by_id for i in start.story_ids) or len(set(start.story_ids)) != len(start.story_ids):
+            raise HTTPException(422, "The selected headlines have changed. Refresh the feed.")
+        stories = [by_id[i] for i in start.story_ids]
     if INDEX.exists():
         with psycopg.connect(os.environ["DATABASE_URL"], row_factory=dict_row) as db:
             catalog = [AgentPersona.model_validate(row) for row in db.execute("SELECT * FROM public.agent_personas")]
@@ -216,7 +235,8 @@ async def produce_segment(key, step, progress=None):
             raise HTTPException(409, "Audio superseded.")
         token = uuid4()
         item.pending = token, turn, cards
-        return {"id": token, "speaker": persona.name, "story": panel.story.headline,
+        return {"id": token, "speaker": persona.name, "host": panel.personas[panel.host].name,
+                "guests": [panel.personas[i].name for i in panel.roster], "story": panel.story.headline,
                 "text": turn.text, "sources": cards, "audio": audio}
     except (ValueError, RuntimeError, OSError) as exc:
         log.warning("Panel turn failed: %s", type(exc).__name__)
