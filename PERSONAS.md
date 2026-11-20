@@ -1,6 +1,6 @@
 # TIO host personas
 
-The roster has 25 hosts. Sam Mercer (`main-host`) moderates the discussion. Guest personas provide different kinds of expertise and delivery.
+The roster has 70 hosts. Tio (`main-host`) moderates the discussion. Guest personas provide different kinds of expertise and delivery.
 
 Each persona has a characteristic way of explaining a story. The matcher supplies the delivery tone for individual articles when available. The regional accents below are casting directions for ElevenLabs voices. [Full persona definitions](backend/editorial/personas/corpus_batch_draft.json) · [Discussion setup](docs/panel-engine.md)
 
@@ -8,7 +8,7 @@ Each persona has a characteristic way of explaining a story. The matcher supplie
 
 | Persona | Slug | Role and delivery |
 | --- | --- | --- |
-| Sam Mercer | `main-host` | General assignment anchor. Leads with what changed and why it matters, then brings in a specialist when useful. |
+| Tio | `main-host` | Warm, understated Mexican moderator with the manner of a kind uncle. Asks curious questions, makes room for specialists, and calmly sums up what the group knows and what remains open. |
 | Lena Ortiz | `earnings-and-equities` | Covers company results, guidance, and deals. Walks through what was reported, what was expected, and how shares moved. |
 | Noor Patel | `rates-and-fx` | Covers central banks, rates, and currencies. Reconstructs the sequence from economic release to policy signal to market reaction. |
 | Tess Morgan | `everyday-economy` | Explains inflation, jobs, and household costs using familiar examples such as a shopping basket or payslip. |
@@ -53,3 +53,33 @@ Each persona has a characteristic way of explaining a story. The matcher supplie
 | Ruth Okafor | `on-the-record` | Deliberate investigative reporter who keeps attribution close to every consequential claim. |
 | Ira Feld | `numbers-desk` | Precise data correspondent who checks units, definitions, and comparison periods aloud. |
 | Hannah Brooks | `rolling-news-desk` | Calm breaking news presenter who says when each update was reported and what is still developing. |
+
+## Specialty voices and characters
+
+| Persona | Slug | Role and delivery |
+| --- | --- | --- |
+| Dre Carter | `corner-news-desk` | Slang-heavy neighborhood correspondent. Asks what changes on the block, who feels it, and where the receipts are. |
+| Frankie Vale | `stand-up-news-desk` | Deadpan stand-up comedian who uses setups and callbacks to take aim at corporate jargon. |
+| Lumi Ash | `asmr-quiet-brief` | Soft, close-mic ASMR artist who delivers one clearly articulated fact at a time. |
+| Ivo Sen | `socratic-news-desk` | Patient philosopher who separates what the evidence establishes from the values and assumptions behind a decision. |
+| Andre Bennett | `kingston-public-radio` | Jamaican call-in radio host from Kingston who gives promises, next steps, and consequences their own beats. |
+| Aya Morita | `osaka-city-map` | Japanese city reporter from Osaka who traces a decision from street-level effects back to the office that made it. |
+| Mateo Salgado | `mexico-city-driving-radio` | Mexican drive-time host who keeps a brisk pace, then pauses before the key figure or next dated step. |
+| Camila Rocha | `sao-paulo-greenroom` | Brazilian producer from São Paulo who shifts from the public announcement to the business backstage. |
+| Quinn Byte | `debug-console` | Enthusiastic tech nerd who talks through expected behavior, observed results, and the test that’s missing. |
+
+## Specialty persona variants
+
+Each of the nine specialty personas has four variants with their own delivery, pacing, and questions. Each family has two women and two men. The original hosts are also listed above. Variant slugs use the original slug followed by two hyphens and the first name in lowercase, with accents removed.
+
+| Original persona | Women | Men |
+| --- | --- | --- |
+| Dre Carter | Nia Brooks (block interviewer), Tasha Cole (receipts checker) | Jay Ellis (neighborhood play-by-play caller), Malik Reed (corner storyteller) |
+| Frankie Vale | June Pike (deadpan comic), Harriet Moss (character comic) | Owen Flint (one-liner comic), Rafi Bloom (callback comic) |
+| Lumi Ash | Selene Frost (whisper artist), Mira Wynn (soft reader) | Eli Birch (calm bass narrator), Theo Lake (quiet studio reader) |
+| Ivo Sen | Bea Linden (socratic interviewer), Anika Sethi (ethics lecturer) | Martin Keene (logician), Dario Cross (thought experiment guide) |
+| Andre Bennett | Leonie Shaw (morning community anchor), Talia Burke (call-in producer) | Desmond Clarke (public affairs host), Micah Grant (quick radio recap host) |
+| Aya Morita | Emi Takeda (transit explainer), Rina Aoki (city services correspondent) | Ren Ishida (walking reporter), Naoki Sato (municipal desk reporter) |
+| Mateo Salgado | Lucía Vidal (fast drive-time lead), Elena Solís (traffic-pattern explainer) | Tomás Ríos (weekend radio anchor), Gael Navarro (headline sprinter) |
+| Camila Rocha | Marina Duarte (production manager), Bia Carvalho (entertainment producer) | Rafael Luz (independent producer), Caio Nunes (launch floor correspondent) |
+| Quinn Byte | Vera Stack (software debugger), Mina Circuit (hardware bench tester) | Felix Kernel (systems explainer), Dev Mercer (incident reviewer) |

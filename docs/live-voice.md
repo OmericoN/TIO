@@ -6,7 +6,7 @@ In the proposed discussion flow, each host has its own persona Markdown, model s
 
 ## Starter personas
 
-The [starter catalog](../backend/editorial/personas/starters.json) contains editable placeholders for Main Host, Markets Specialist, and Economy Specialist. Edit their Markdown files in the same directory to change how each speaker sounds. Add a catalog entry and a matching `<slug>.md` file to add a host.
+The [starter catalog](../backend/editorial/personas/starters.json) includes Tio as moderator, plus the Markets Specialist and Economy Specialist. Edit their Markdown files in the same directory to change how each speaker sounds. Add a catalog entry and a matching `<slug>.md` file to add a host.
 
 `discussion.personas.load_starter_personas()` reads the local fixtures into `AgentPersona` records. The same model accepts existing `agent_personas` rows. The fixture UUIDs are for local development. Once the database is connected, use the returned row IDs from the recommender. Fill in `llm_model`, `voice_id`, and Newstex codes for `expertise_topics` when the team chooses them.
 
