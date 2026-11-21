@@ -1,5 +1,6 @@
 import asyncio
 import json
+import tempfile
 import os
 import threading
 import time
@@ -322,3 +323,17 @@ class FigureTest(unittest.TestCase):
             self.assertTrue(figures_supported(spoken, quote), spoken)
         for spoken in ("99%", "2025", "4%", "100%"):
             self.assertFalse(figures_supported(spoken, quote), spoken)
+
+
+class HoldingTest(unittest.TestCase):
+    def test_holding_lines_are_voiced_once_then_read_from_disk(self):
+        panel = fixture()
+        with tempfile.TemporaryDirectory() as folder, patch.object(api, "HOLDING_CACHE", Path(folder)), \
+                patch.object(api, "eleven", return_value=b"mp3") as voice, \
+                patch.dict(os.environ, {"PANEL_VOICE_" + panel.personas[panel.host].slug.upper().replace("-", "_"): "v"}):
+            first = api.holding_lines(panel)
+            second = api.holding_lines(panel)
+        self.assertEqual(len(first), len(api.HOLDING_LINES))
+        self.assertEqual(first, second)
+        self.assertEqual(voice.call_count, len(api.HOLDING_LINES))   # the second session reused the cache
+        self.assertTrue(all(len(line.split()) >= 20 for line in api.HOLDING_LINES))

@@ -93,6 +93,43 @@ export function PanelPlayer({ owner, stories, preferences, plan, recorded, origi
   const pendingInterrupt = useRef<Promise<unknown> | null>(null)
   const current = useRef<Segment | null>(null)
   const finished = useRef<{ heard: string; seconds: number; fully_heard: boolean } | null>(null)
+  // The host's pre-voiced holding lines, loaded when the briefing starts and played while a question is answered.
+  const holding = useRef<{ speaker: string; clips: { text: string; audio: string }[]; last: number }>({ speaker: '', clips: [], last: -1 })
+  const holdingPlayback = useRef<{ audio: HTMLAudioElement; done: () => void } | null>(null)
+
+  async function loadHolding(id: string) {
+    try {
+      const response = await fetch(`/api/panel/${id}/holding`)
+      if (!response.ok || session.current !== id) return
+      const { speaker, clips } = await response.json()
+      if (Array.isArray(clips)) holding.current = { speaker, clips, last: -1 }
+    } catch { /* Questions still work without holding lines. */ }
+  }
+
+  function stopHolding() {
+    const playing = holdingPlayback.current
+    holdingPlayback.current = null
+    if (playing) { playing.audio.pause(); playing.done() }
+  }
+
+  // Plays a different holding line each time; resolves when it ends, fails or is stopped.
+  function playHolding(): Promise<void> {
+    stopHolding()
+    const { clips, speaker, last } = holding.current
+    if (!clips.length) return Promise.resolve()
+    const choices = clips.map((_, i) => i).filter(i => i !== last || clips.length === 1)
+    const index = choices[Math.floor(Math.random() * choices.length)]
+    holding.current.last = index
+    const audio = new Audio('data:audio/mpeg;base64,' + clips[index].audio)
+    return new Promise(resolve => {
+      const done = () => { if (holdingPlayback.current?.audio === audio) holdingPlayback.current = null; setSpeaker(''); resolve() }
+      holdingPlayback.current = { audio, done }
+      audio.onended = done
+      audio.onerror = done
+      setSpeaker(speaker)
+      void audio.play().catch(done)
+    })
+  }
 
   useEffect(() => { consolePanel.current?.scrollTo(0, 0) }, [active?.id])
 
@@ -146,6 +183,7 @@ export function PanelPlayer({ owner, stories, preferences, plan, recorded, origi
   }
 
   function end() {
+    stopHolding()
     generation.current++
     if (session.current) void fetch('/api/panel/' + session.current, { method: 'DELETE' }).catch(() => {})
     session.current = ''
@@ -161,7 +199,7 @@ export function PanelPlayer({ owner, stories, preferences, plan, recorded, origi
     setStatus(error instanceof Error ? error.message : 'Panel unavailable.')
   }
 
-  async function next(body: object = {}) {
+  async function next(body: object = {}, before?: Promise<void>) {
     const id = session.current, gen = generation.current
     if (!id) return
     setStatus('question' in body ? 'Finding the answer in your sources…' : 'Preparing a verified segment…')
@@ -170,6 +208,10 @@ export function PanelPlayer({ owner, stories, preferences, plan, recorded, origi
         if (session.current === id && generation.current === gen) setStatus(message)
       })
       if (session.current !== id || generation.current !== gen) return
+      if (before) {
+        await before  // let the holding line finish rather than cutting it off mid-sentence
+        if (session.current !== id || generation.current !== gen) return
+      }
       if ('done' in result) { end(); setStatus('Briefing complete.'); return }
       setStatus('')
       show(result)
@@ -178,6 +220,7 @@ export function PanelPlayer({ owner, stories, preferences, plan, recorded, origi
 
   function interrupt() {
     if (!session.current || pendingInterrupt.current) return
+    stopHolding()
     const heard = current.current?.id, seconds = player.current?.currentTime || 0
     const gen = ++generation.current
     show(null)
@@ -192,11 +235,12 @@ export function PanelPlayer({ owner, stories, preferences, plan, recorded, origi
     save({ id: crypto.randomUUID(), speaker: 'Listener', text: text.trim() })
     interrupt()
     const gen = generation.current
+    const thinking = playHolding()  // the host starts "thinking aloud" at once, while the answer is prepared
     try {
       await pendingInterrupt.current
       if (generation.current !== gen) return
       pendingInterrupt.current = null
-      await next({ question: text })
+      await next({ question: text }, thinking)
     } catch (e) { if (generation.current === gen) fail(e) }
   }
 
@@ -252,6 +296,7 @@ export function PanelPlayer({ owner, stories, preferences, plan, recorded, origi
       }
       session.current = result.id
       sessionStart.current = gen
+      void loadHolding(result.id)
       record.sample = result.sample
       setSample(result.sample)
       await next()

@@ -1,4 +1,5 @@
 import base64
+import hashlib
 import asyncio
 import json
 import logging
@@ -7,6 +8,7 @@ import time
 from copy import copy
 from dataclasses import dataclass
 from functools import lru_cache
+from pathlib import Path
 from typing import Literal
 from urllib.parse import quote
 from urllib.request import Request as ProviderRequest, urlopen
@@ -92,6 +94,7 @@ class Session:
     touched: float = 0
     pending_seconds: float = 0  # length of the pending segment's audio
     prefetch: Prefetch | None = None
+    holding: asyncio.Task | None = None  # the host's pre-voiced holding lines for listener questions
 
 
 sessions: dict[UUID, Session] = {}
@@ -254,6 +257,9 @@ async def start_panel(start: Start):
         raise HTTPException(503, detail) from None
     key = uuid4()
     sessions[key] = Session(panel, touched=now)
+    # Voice the host's holding lines now, in the background, so they're ready before the first question.
+    sessions[key].holding = asyncio.create_task(run_in_threadpool(holding_lines, panel))
+    sessions[key].holding.add_done_callback(lambda task: task.cancelled() or task.exception())
     return {"id": key, "sample": (not start.test_shortlist and start.match_result is None
                                  and start.briefing_plan is None and not INDEX.exists())}
 
@@ -296,6 +302,64 @@ async def interrupt(key: UUID, step: Step):
 @router.post("/{key}/next")
 async def next_segment(key: UUID, step: Step):
     return await produce_segment(key, step)
+
+
+# Played the moment a listener asks a question, while the answer is written, checked and voiced. Long and
+# hesitant on purpose: each buys roughly eight to twelve seconds and sounds like the host thinking it through.
+HOLDING_LINES = [
+    "Ooh, good question. Hmm... let me think about that for a second, because I want to get it right. "
+    "Let me pull up what the reporting actually says here... okay.",
+    "Right, okay. That's a fair thing to ask. Uh, give me a moment... I'm looking back through the "
+    "articles we have on this, so I don't just guess. Bear with me...",
+    "Hmm. Yeah, that's a really interesting point. Let me... let me check the sources on that, because "
+    "the details matter here. Okay, one second...",
+    "Oh, I like that question. So... hmm. I want to be careful with this one. Let me go back to what the "
+    "outlets reported, rather than speculate. Just a moment...",
+    "Sure, sure. Um, that's worth digging into. Let me have a look at the reporting... there's a fair bit "
+    "here, so give me a second to find the part that actually answers it.",
+    "Good one. Hmm... okay, so, let me think. I'd rather check than give you half an answer. "
+    "Pulling up the articles now... right.",
+    "Ah, yes. That's something a lot of people are wondering, I think. Uh, let me look at exactly what was "
+    "said, because the wording matters... okay, bear with me.",
+    "Mm, okay. Let me take that one. Hmm... I'm just checking the sources we have, to make sure what I "
+    "tell you holds up. One moment...",
+]
+HOLDING_CACHE = Path(os.getenv("PANEL_HOLDING_CACHE") or REPO_ROOT / ".briefing" / "holding")
+
+
+def holding_lines(panel):
+    """The host's holding lines as [{text, audio}], voiced once and cached on disk by voice, text and TTS settings,
+    so later briefings reuse them for free. A line that fails to voice is skipped."""
+    persona = panel.personas[panel.host]
+    voice = persona.voice_id or os.getenv("PANEL_VOICE_" + persona.slug.upper().replace("-", "_"))
+    if not voice:
+        return []
+    HOLDING_CACHE.mkdir(parents=True, exist_ok=True)
+    clips = []
+    for text in HOLDING_LINES:
+        request = speech_request(text, "neutral")
+        name = hashlib.sha256(json.dumps([voice, request], sort_keys=True).encode()).hexdigest()[:32]
+        path = HOLDING_CACHE / f"{name}.mp3"
+        try:
+            if not path.exists() or path.stat().st_size < 1024:  # missing or not real audio
+                audio = eleven("text-to-speech/" + quote(voice, safe=""), request)
+                log.info("panel_tts characters=%d", len(text))
+                path.write_bytes(audio)
+            clips.append({"text": text, "audio": base64.b64encode(path.read_bytes()).decode()})
+        except (ValueError, OSError) as exc:
+            log.warning("Holding line not voiced: %s: %s", type(exc).__name__, exc)
+    return clips
+
+
+@router.get("/{key}/holding")
+async def holding(key: UUID):
+    """The host's pre-voiced holding lines; waits for them on the first call of a session."""
+    item = session(key)
+    try:
+        clips = await asyncio.wait_for(asyncio.shield(item.holding), 60) if item.holding else []
+    except Exception:  # noqa: BLE001 - questions still work without holding lines
+        clips = []
+    return {"speaker": item.panel.personas[item.panel.host].name, "clips": clips}
 
 
 def segment(panel, progress=None):
