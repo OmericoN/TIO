@@ -423,3 +423,30 @@ class LiveConversationTest(unittest.IsolatedAsyncioTestCase):
         with patch.dict(os.environ, {"ELEVENLABS_AGENT_ID": ""}), self.assertRaises(HTTPException) as caught:
             await api.start_live(key)
         self.assertEqual(caught.exception.status_code, 503)
+
+
+class LiveHostTest(unittest.TestCase):
+    def panel(self):
+        panel = fixture()
+        report = panel.story.articles[1]
+        panel.reviews[panel.story.id] = EvidenceReview(findings=[Finding(
+            point="Revenue grew 6% in the quarter", status="reported",
+            citations=[Citation(article_id=report.id, quote=report.body)])])
+        return panel
+
+    def test_cards_number_each_story_and_keep_their_sources(self):
+        cards = self.panel().fact_cards()
+        self.assertEqual(cards[0]["id"], "1.1")
+        self.assertEqual(cards[0]["sources"][0]["claim"], "Revenue grew 6% in the quarter")
+        self.assertEqual({c["story"] for c in cards}, set(range(1, len(fixture().stories) + 1)))
+        prompt = self.panel().show_prompt()
+        self.assertIn("[1.1] Revenue grew 6% in the quarter", prompt)
+        self.assertIn("That's the briefing.", prompt)
+
+    def test_audit_shows_the_card_used_and_flags_invented_figures(self):
+        panel = self.panel()
+        cards, correction = panel.audit_live("So revenue grew about 6% this quarter, the report says.")
+        self.assertEqual(cards[0]["id"], "1.1")
+        self.assertIsNone(correction)
+        _, correction = panel.audit_live("Revenue jumped 14% this quarter.")
+        self.assertIn("14", correction)

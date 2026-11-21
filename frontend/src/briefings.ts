@@ -6,7 +6,8 @@ export type Card = { id: string; publisher: string; language: string; url: strin
 export type Segment = { id: string; story: string; speaker: string; host: string; guests: string[]; text: string; sources: Card[]; audio?: string; audioUrl?: string }
 export type Entry = Segment | { id: string; speaker: 'Listener'; text: string }
 export type Briefing = { id: string; date: string; titles: string[]; entries: Entry[]; sample: boolean }
-export type Preferences = { profile: string; mode: 'panel' | 'presenter'; minutes: number }
+// 'live' is the experimental live host: one host presents the whole briefing over a speech-to-speech session.
+export type Preferences = { profile: string; mode: 'panel' | 'presenter' | 'live'; minutes: number }
 export type DiscussionPlan = {
   segments: { article_ids: string[]; estimated_seconds: number }[]
   hosts: string[]

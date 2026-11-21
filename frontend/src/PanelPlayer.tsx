@@ -100,6 +100,10 @@ export function PanelPlayer({ owner, stories, preferences, plan, recorded, origi
   const live = useRef<{ gen: number; transcript: { role: 'listener' | 'host'; text: string }[]; conversation?: Conversation;
     idle?: number; finishing?: boolean; micWasOn: boolean } | null>(null)
   const [liveWith, setLiveWith] = useState('')
+  // Experimental live host: the whole briefing runs over one speech-to-speech session, fed fact cards by the backend.
+  const liveShow = preferences.mode === 'live' && !recorded
+  const showSession = useRef<{ conversation?: Conversation; cue?: number; heardListener: number; ending: boolean;
+    startedAt: number; story: string } | null>(null)
 
   async function loadHolding(id: string) {
     try {
@@ -188,6 +192,8 @@ export function PanelPlayer({ owner, stories, preferences, plan, recorded, origi
 
   function end() {
     stopHolding()
+    const showing = showSession.current
+    if (showing) { showSession.current = null; clearTimeout(showing.cue); void showing.conversation?.endSession().catch(() => {}) }
     if (live.current) { live.current.finishing = true; void live.current.conversation?.endSession().catch(() => {}); live.current = null; setLiveWith('') }
     generation.current++
     if (session.current) void fetch('/api/panel/' + session.current, { method: 'DELETE' }).catch(() => {})
@@ -300,7 +306,8 @@ export function PanelPlayer({ owner, stories, preferences, plan, recorded, origi
     setStatus('Preparing your briefing…')
     try {
       const lineup = plan ? { briefing_plan: plan } : { story_ids: stories.map(s => s.id) }
-      const result = await post<{ id: string; sample: boolean }>('', { ...preferences, ...lineup })
+      const mode = preferences.mode === 'live' ? 'presenter' : preferences.mode  // the backend prepares a one-host briefing
+      const result = await post<{ id: string; sample: boolean }>('', { ...preferences, mode, ...lineup })
       if (generation.current !== gen) {
         await fetch('/api/panel/' + result.id, { method: 'DELETE' })
         return
@@ -310,8 +317,83 @@ export function PanelPlayer({ owner, stories, preferences, plan, recorded, origi
       void loadHolding(result.id)
       record.sample = result.sample
       setSample(result.sample)
-      await next()
+      if (liveShow) await startShow(gen)
+      else await next()
     } catch (e) { if (generation.current === gen) fail(e) }
+  }
+
+  // Live host: one live session presents every story from the fact cards. The player nudges it on with producer
+  // cues after each short chunk, audits every line it speaks for sources and unsupported figures, and lets the
+  // listener simply talk over it.
+  async function startShow(gen: number) {
+    const id = session.current
+    setStatus('Connecting your live host…')
+    const briefing = await post<{ token: string; prompt: string; voice_id: string | null; speaker: string;
+      stories: string[]; max_seconds: number }>(`/${id}/live`, { mode: 'show' })
+    if (session.current !== id || generation.current !== gen) return
+    const state: NonNullable<typeof showSession.current> = { heardListener: 0, ending: false, startedAt: Date.now(),
+      story: briefing.stories[0] ?? '' }
+    showSession.current = state
+    setHost(briefing.speaker)
+    const cue = () => {
+      clearTimeout(state.cue)
+      state.cue = window.setTimeout(() => {
+        if (showSession.current !== state || state.ending) return
+        if (Date.now() - state.heardListener < 1500) { cue(); return }  // the listener is talking: wait
+        const used = (Date.now() - state.startedAt) / 60000
+        state.conversation?.sendUserMessage(`[producer: continue. ${used.toFixed(1)} of ${preferences.minutes} minutes used]`)
+      }, 1200)
+    }
+    const conversation = await Conversation.startSession({
+      conversationToken: briefing.token, connectionType: 'webrtc',
+      overrides: {
+        agent: { prompt: { prompt: briefing.prompt }, firstMessage: "Alright, let's get into today's briefing." },
+        ...(briefing.voice_id ? { tts: { voiceId: briefing.voice_id } } : {}),
+        conversation: { maxDurationSeconds: briefing.max_seconds },
+      },
+      onVadScore: ({ vadScore }) => { if (vadScore > 0.6) state.heardListener = Date.now() },
+      onModeChange: ({ mode }) => {
+        if (showSession.current !== state) return
+        if (mode === 'speaking') { clearTimeout(state.cue); setSpeaker(briefing.speaker); setStatus('') }
+        else {
+          setSpeaker('')
+          if (state.ending) void state.conversation?.endSession().catch(() => {})
+          else cue()
+        }
+      },
+      onMessage: async ({ message, source }) => {
+        const text = message.trim()
+        if (showSession.current !== state || !text || text.startsWith('[producer') || text.startsWith('[fact check')) return
+        if (source === 'user') {
+          state.heardListener = Date.now()
+          save({ id: crypto.randomUUID(), speaker: 'Listener', text })
+          return
+        }
+        if (/that'?s the briefing\.?/i.test(text)) state.ending = true
+        let cards: { story: number; sources: Segment['sources'] }[] = [], correction: string | null = null, story: string | null = null
+        try {
+          ({ cards, correction, story } = await post<{ cards: typeof cards; correction: string | null; story: string | null }>(
+            `/${id}/live/audit`, { text }))
+        } catch { /* show the line without sources */ }
+        if (showSession.current !== state) return
+        if (story) state.story = story
+        if (correction) state.conversation?.sendContextualUpdate(correction)
+        const line: Segment = { id: crypto.randomUUID(), story: state.story, speaker: briefing.speaker,
+          host: briefing.speaker, guests: [], text, sources: cards.flatMap(card => card.sources) }
+        setActive(line)
+        save(line)
+      },
+      onDisconnect: () => {
+        if (showSession.current !== state) return
+        const finished = state.ending
+        end()
+        setStatus(finished ? 'Briefing complete.' : 'The live host disconnected. Close the session and try again.')
+      },
+      onError: message => { if (showSession.current === state) { end(); setStatus('Live host unavailable: ' + message) } },
+    })
+    if (showSession.current !== state) { void conversation.endSession().catch(() => {}); return }
+    state.conversation = conversation
+    setStatus('Live · just speak to interrupt.')
   }
 
   const BACK_TO_SHOW = /\b(carry on|go on|keep going|continue|resume|back to (the )?(briefing|show|panel|news)|that'?s all|that'?s it|thanks?( you)?)\b/i
@@ -421,7 +503,7 @@ export function PanelPlayer({ owner, stories, preferences, plan, recorded, origi
       <div ref={consolePanel} className="session-console">
       <p role="status" className="player-status">{status}</p>
       {saveError && <p role="alert">This browser could not save your briefing. Check the available device storage.</p>}
-      <audio ref={player} controls aria-label="Briefing audio" hidden={!active} className="w-full"
+      <audio ref={player} controls aria-label="Briefing audio" hidden={!active || liveShow} className="w-full"
         onPlaying={() => { const line = current.current; if (line) { setSpeaker(line.speaker); setStatus(''); save(line); introduce() } }}
         onPause={() => setSpeaker('')} onTimeUpdate={introduce}
         onError={() => { if (current.current) fail(new Error('This audio could not play. Close the session and try again.')) }} onEnded={() => {
@@ -441,10 +523,17 @@ export function PanelPlayer({ owner, stories, preferences, plan, recorded, origi
     </div>}
     {liveWith && <button type="button" className="button" onClick={() => void finishLive()}>Back to the briefing</button>}
     {running && !recorded && <form className="flex flex-wrap gap-2" onSubmit={e => {
-      e.preventDefault(); void ask(question); setQuestion('')
+      e.preventDefault()
+      const showing = showSession.current
+      if (showing?.conversation && question.trim()) {  // live host: typed questions go straight into the session
+        save({ id: crypto.randomUUID(), speaker: 'Listener', text: question.trim() })
+        showing.heardListener = Date.now()
+        showing.conversation.sendUserMessage(question.trim())
+      } else void ask(question)
+      setQuestion('')
     }}>
-      <button className="button" type="button" disabled={!session.current || scribe.status === 'connecting'}
-        onClick={scribe.isConnected ? scribe.disconnect : microphone}>{scribe.isConnected ? 'Disable microphone' : 'Enable microphone'}</button>
+      {!liveShow && <button className="button" type="button" disabled={!session.current || scribe.status === 'connecting'}
+        onClick={scribe.isConnected ? scribe.disconnect : microphone}>{scribe.isConnected ? 'Disable microphone' : 'Enable microphone'}</button>}
       <input className="grow rounded border p-2" aria-label="Question for the panel" placeholder="Ask the panel"
         value={question} maxLength={1000} onChange={e => setQuestion(e.target.value)} />
       <button className="button" disabled={!question.trim() || !session.current}>Ask</button>

@@ -476,8 +476,16 @@ class LiveEnd(BaseModel):
     transcript: list[LiveLine] = Field(max_length=80)
 
 
+class LiveStart(BaseModel):
+    mode: Literal["interrupt", "show"] = "interrupt"
+
+
+class LiveAudit(BaseModel):
+    text: str = Field(min_length=1, max_length=4000)
+
+
 @router.post("/{key}/live")
-async def start_live(key: UUID):
+async def start_live(key: UUID, body: LiveStart | None = None):
     """A live speech-to-speech session with the host for a listener interruption: an ElevenLabs agent token plus the
     prompt and voice that make the agent this host, briefed on the listener and the current story."""
     item = session(key)
@@ -490,8 +498,22 @@ async def start_live(key: UUID):
     except (URLError, TimeoutError, ValueError, OSError):
         raise HTTPException(502, "ElevenLabs could not start a live session.") from None
     host = item.panel.personas[item.panel.host]
-    return {"token": token.token, "prompt": item.panel.live_prompt(), "voice_id": host.voice_id,
-            "speaker": host.name}
+    show = body is not None and body.mode == "show"
+    return {"token": token.token, "prompt": item.panel.show_prompt() if show else item.panel.live_prompt(),
+            "voice_id": host.voice_id, "speaker": host.name,
+            "stories": [s.headline for s in item.panel.stories],
+            "max_seconds": round(item.panel.minutes * 60 * 1.5 + 300) if show else 600}
+
+
+@router.post("/{key}/live/audit")
+async def audit_live(key: UUID, body: LiveAudit):
+    """Source cards for a line the live host just spoke, and a correction note if it stated an unsupported figure."""
+    item = session(key)
+    cards, correction = item.panel.audit_live(body.text)
+    if correction:
+        log.warning("Live host figure not in the fact cards: %s | line: %s", correction, body.text)
+    return {"cards": cards, "correction": correction,
+            "story": cards[0]["headline"] if cards else None}
 
 
 @router.post("/{key}/live/end")
