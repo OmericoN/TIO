@@ -22,7 +22,7 @@ class DiscussionPlan(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     segments: list[PlannedStory] = Field(min_length=1, max_length=340)
-    hosts: list[UUID] = Field(max_length=2)
+    hosts: list[UUID] = Field(max_length=4)
     tones: dict[str, Tone] = Field(max_length=340)
 
     @model_validator(mode="after")

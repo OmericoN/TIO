@@ -10,12 +10,15 @@ type Props = {
   speaker: string
   onConfirm?: () => void
   confirming?: boolean
+  orbPhase: 'setup' | 'loading' | 'ready'
   children?: ReactNode
 }
 
-export function AgentStage({ origin, audio, host, guests, speaker, onConfirm, confirming, children }: Props) {
+export function AgentStage({ origin, audio, host, guests, speaker, onConfirm, confirming, orbPhase, children }: Props) {
   const stage = useRef<HTMLDivElement>(null)
   const hostBody = useRef<HTMLDivElement>(null)
+  const hostLoad = useRef<HTMLDivElement>(null)
+  const loadMotion = useRef<Animation | null>(null)
   useLayoutEffect(() => {
     let entrance: Animation | undefined
     // The parent opens the native dialog in its layout effect.
@@ -34,6 +37,34 @@ export function AgentStage({ origin, audio, host, guests, speaker, onConfirm, co
     })
     return () => { cancelAnimationFrame(frame); entrance?.cancel() }
   }, [origin])
+
+  useLayoutEffect(() => {
+    const orb = hostLoad.current!
+    const reduced = matchMedia('(prefers-reduced-motion: reduce)')
+    function sync() {
+      const from = loadMotion.current?.playState === 'running' ? getComputedStyle(orb).transform : null
+      loadMotion.current?.cancel()
+      loadMotion.current = null
+      if (reduced.matches) return
+
+      if (orbPhase === 'loading') {
+        loadMotion.current = orb.animate([
+          { transform: 'scale(1)' }, { transform: 'scale(.2)' },
+        ], { duration: 780, easing: 'cubic-bezier(.77, 0, .175, 1)', iterations: Infinity, direction: 'alternate' })
+      } else if (orbPhase === 'ready' && from) {
+        loadMotion.current = orb.animate([
+          { transform: from, easing: 'cubic-bezier(.77, 0, .175, 1)' },
+          { transform: 'scale(.12)', offset: 240 / 520, easing: 'cubic-bezier(.23, 1, .32, 1)' },
+          { transform: 'none' },
+        ], { duration: 520 })
+      }
+    }
+    sync()
+    reduced.addEventListener('change', sync)
+    return () => reduced.removeEventListener('change', sync)
+  }, [orbPhase])
+
+  useLayoutEffect(() => () => loadMotion.current?.cancel(), [])
 
   useEffect(() => {
     const media = audio.current, ctx = origin.context
@@ -96,9 +127,10 @@ export function AgentStage({ origin, audio, host, guests, speaker, onConfirm, co
 
   return <div ref={stage} className="agent-stage" aria-label="Discussion participants">
     {children}
-    <div className="actor host" data-speaking={speaker === host}><div className="host-body" ref={hostBody}><div className="orb-meter">
+    <div className="actor host" data-speaking={speaker === host}><div className="host-body" ref={hostBody}>
+      <div className="host-load" data-phase={orbPhase} ref={hostLoad}><div className="orb-meter">
       {onConfirm ? <button type="button" className="agent-launch host-confirm" aria-label="Begin briefing" disabled={confirming} onClick={onConfirm}><Orb /></button> : <Orb />}
-    </div></div><span>{onConfirm ? confirming ? 'Starting…' : 'Tap to begin' : host}</span></div>
+    </div></div></div><span>{onConfirm ? confirming ? 'Starting…' : 'Tap to begin' : orbPhase === 'loading' ? 'Loading…' : host}</span></div>
     {guests.map((guest, index) => <div key={guest} className={'actor guest guest-' + index} data-speaking={speaker === guest}><div className="orb-meter"><Orb /></div><span>{guest}</span></div>)}
   </div>
 }

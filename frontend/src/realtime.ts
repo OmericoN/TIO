@@ -131,13 +131,13 @@ export class RealtimeAgent {
     this.send({ type: 'response.create' })
   }
 
-  /** Push-to-talk: open the microphone and start a fresh recording. */
+  /** Open the microphone and start a fresh recording. */
   startListening() {
     this.send({ type: 'input_audio_buffer.clear' })
     this.microphone?.getAudioTracks().forEach(track => { track.enabled = true })
   }
 
-  /** Push-to-talk released: close the microphone and send what was said for transcription. */
+  /** Close the microphone and send what was said for transcription. */
   stopListening() {
     this.microphone?.getAudioTracks().forEach(track => { track.enabled = false })
     this.send({ type: 'input_audio_buffer.commit' })
