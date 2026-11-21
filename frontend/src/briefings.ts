@@ -83,6 +83,29 @@ export function heardFactChecks(cards: Card[], transcript: string): Card[] {
   })
 }
 
+const transcriptKey = (text: string) => text.normalize('NFKC').trim().replace(/\s+/g, ' ').toLowerCase()
+
+export function savedBriefings(rows: Briefing[]): Briefing[] {
+  const conversations = new Set<string>()
+  return rows.slice().sort((a, b) => b.date.localeCompare(a.date)).flatMap(row => {
+    const turns = new Set<string>()
+    const entries = row.entries.flatMap<Entry>(entry => {
+      const key = transcriptKey(entry.text)
+      if (!key || key === '...' || turns.has(key)) return []
+      turns.add(key)
+      if ('sources' in entry) {
+        const { audio, audioUrl, ...transcript } = entry
+        return [transcript]
+      }
+      return [entry]
+    })
+    const key = JSON.stringify(entries.map(entry => transcriptKey(entry.text)))
+    if (!entries.length || conversations.has(key)) return []
+    conversations.add(key)
+    return [{ ...row, titles: [...new Set(row.titles)], entries }]
+  })
+}
+
 // Separate databases keep demo and signed-in listeners' device histories independent.
 export function historyStore(owner: string, change?: Briefing | string): Promise<Briefing[]> {
   return new Promise((resolve, reject) => {
@@ -91,12 +114,19 @@ export function historyStore(owner: string, change?: Briefing | string): Promise
     open.onerror = () => reject(open.error)
     open.onsuccess = () => {
       const db = open.result
-      const transaction = db.transaction('sessions', change === undefined ? 'readonly' : 'readwrite')
+      const transaction = db.transaction('sessions', 'readwrite')
       const sessions = transaction.objectStore('sessions')
-      const read = change === undefined ? sessions.getAll() : null
       if (typeof change === 'string') sessions.delete(change)
       else if (change) sessions.put(change)
-      transaction.oncomplete = () => { db.close(); resolve(read?.result ?? []) }
+      const read = sessions.getAll()
+      let saved: Briefing[] = []
+      read.onsuccess = () => {
+        saved = savedBriefings(read.result)
+        const ids = new Set(saved.map(row => row.id))
+        for (const row of read.result as Briefing[]) if (!ids.has(row.id)) sessions.delete(row.id)
+        for (const row of saved) sessions.put(row)
+      }
+      transaction.oncomplete = () => { db.close(); resolve(saved) }
       transaction.onabort = () => { db.close(); reject(transaction.error) }
     }
   })
