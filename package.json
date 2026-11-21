@@ -1,4 +1,7 @@
 {
+  "scripts": {
+    "dev:api:tunnel": "uv run --project backend --locked uvicorn main:app --app-dir backend --reload --host 127.0.0.1 --port 8001 --no-proxy-headers"
+  },
   "dependencies": {
     "react": "^19.3.1",
     "react-dom": "^19.3.1"

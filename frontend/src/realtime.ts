@@ -27,7 +27,7 @@ export class RealtimeAgent {
     const pc = new RTCPeerConnection()
     const agent = new RealtimeAgent(info, pc, handlers)
     agent.audio.autoplay = true
-    pc.ontrack = event => { agent.audio.srcObject = event.streams[0] }
+    pc.ontrack = event => { agent.audio.srcObject = event.streams[0] ?? new MediaStream([event.track]) }
     if (microphone) {
       agent.microphone = microphone
       microphone.getAudioTracks().forEach(track => { track.enabled = false; pc.addTrack(track, microphone) })

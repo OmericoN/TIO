@@ -44,6 +44,24 @@ For a local demo, select **Open demo in a new tab** on the sign-in screen or ope
 
 Both servers can start without provider credentials. For generated discussions, configure the model and speaker voices in the [panel engine guide](docs/panel-engine.md). Use the microphone deck to interrupt a generated briefing. Remove any locally saved licensed briefings after the hackathon.
 
+### Share through Cloudflare Tunnel
+
+From the repository root, use this backend command instead of the normal backend command:
+
+```sh
+bun run dev:api:tunnel
+```
+
+Set `TIO_BACKEND_PORT=8001` in `frontend/.env.local`, then start Vite from `frontend/` with `bun run dev -- --host 127.0.0.1 --port 5173 --strictPort`. If you choose a different frontend port, use the same one in the tunnel command. In a third terminal, run:
+
+```sh
+cloudflared tunnel --url http://127.0.0.1:5173
+```
+
+Open the HTTPS URL printed by cloudflared and sign in to load your personalized news feed. The frontend sends `/api` requests through the same tunnel and Vite's existing backend proxy. Check `<tunnel-url>/api/health` for `{"status":"ok"}`. Keep both servers running.
+
+The tunnel backend command binds to loopback port 8001 to avoid conflicts with the normal backend on 8000. It disables Uvicorn's forwarded-IP handling so requests from Vite pass the API's local-development checks. Remove `TIO_BACKEND_PORT` from `frontend/.env.local` when switching back to the normal backend. Share the tunnel URL only with trusted testers: these development routes have no general authentication and can access database content and spend provider credits. Stop cloudflared when finished. The `/demo` page remains available on localhost; use normal sign-in on the tunnel URL.
+
 ## Guides
 
 - [Project brief](docs/project-brief.md) — judging, demo requirements, and proposed pipeline

@@ -1,15 +1,16 @@
 import tailwindcss from '@tailwindcss/vite'
 import react from '@vitejs/plugin-react'
-import { defineConfig } from 'vite'
+import { defineConfig, loadEnv } from 'vite'
 
-export default defineConfig({
+export default defineConfig(({ mode }) => ({
   plugins: [react(), tailwindcss()],
   server: {
-    allowedHosts: [
-      'salmon-comparative-produces-regression.trycloudflare.com',
-    ],
+    allowedHosts: ['.trycloudflare.com'],
     proxy: {
-      '/api': 'http://127.0.0.1:8000',
+      '/api': {
+        target: `http://127.0.0.1:${loadEnv(mode, '.', 'TIO_').TIO_BACKEND_PORT || '8000'}`,
+        changeOrigin: true,
+      },
     },
   },
-})
+}))

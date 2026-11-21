@@ -120,6 +120,7 @@ export function PanelPlayer({ owner, stories: chosenStories, preferences, langua
   }
   const [sample, setSample] = useState(recorded)
   const [speaker, setSpeaker] = useState('')
+  const [soundBlocked, setSoundBlocked] = useState(false)
   const [voice, setVoice] = useState<{ speaker: string; stream: MediaStream } | null>(null)
   const [host, setHost] = useState('Main Host')
   const [guests, setGuests] = useState<string[]>([])
@@ -149,7 +150,7 @@ export function PanelPlayer({ owner, stories: chosenStories, preferences, langua
   const realtimeMode = !recorded
   const rt = useRef<{ agents: Map<string, RealtimeAgent>; host?: RealtimeAgent; microphone: MediaStream | null;
     current?: RealtimeAgent; listening: boolean; questions: string[];
-    transcriptionTimer?: number; release?: () => void } | null>(null)
+    transcriptionTimer?: number; release?: () => void; retryAudio?: () => void; releaseAudio?: () => void } | null>(null)
 
   function resumePanel(state: NonNullable<typeof rt.current>) {
     if (rt.current !== state) return
@@ -295,6 +296,7 @@ export function PanelPlayer({ owner, stories: chosenStories, preferences, langua
       rt.current = null
       clearTimeout(panel.transcriptionTimer)
       panel.release?.()
+      panel.releaseAudio?.()
       panel.agents.forEach(agent => agent.close())
       panel.microphone?.getTracks().forEach(track => track.stop())
     }
@@ -305,6 +307,7 @@ export function PanelPlayer({ owner, stories: chosenStories, preferences, langua
     closeRealtime()
     setTalkMic(null)
     setTalkPhase('idle')
+    setSoundBlocked(false)
     if (live.current) { live.current.finishing = true; void live.current.conversation?.endSession().catch(() => {}); live.current = null; setLiveWith('') }
     generation.current++
     if (session.current) void fetch('/api/panel/' + session.current, { method: 'DELETE' }).catch(() => {})
@@ -552,6 +555,31 @@ export function PanelPlayer({ owner, stories: chosenStories, preferences, langua
         if (previousStory.current) await storyCue(cueContext.current ??= new AudioContext())
         previousStory.current = turn.story
       }
+      try {
+        await agent.audio.play()
+      } catch (error) {
+        if (rt.current !== state) return
+        if (!(error instanceof DOMException) || error.name !== 'NotAllowedError') {
+          throw new Error(`Could not play audio for ${turn.speaker}. Try reopening the briefing.`)
+        }
+        setStatus('Tap Enable sound to hear the panel.')
+        setSoundBlocked(true)
+        await new Promise<void>(resolve => {
+          state.releaseAudio = resolve
+          state.retryAudio = () => {
+            // Autoplay permission can be per element, so start every voice directly from the tap.
+            for (const other of state.agents.values()) {
+              const playing = other.audio.play()
+              void playing.then(() => { if (other === agent) resolve() }).catch(() => {
+                if (other === agent && rt.current === state) setStatus('Sound is still blocked. Tap Enable sound to retry.')
+              })
+            }
+          }
+        })
+        state.releaseAudio = state.retryAudio = undefined
+        if (rt.current !== state) return
+        setSoundBlocked(false)
+      }
       while (rt.current === state && state.listening) await waitForListener()
       if (rt.current !== state) return
       if (!question && state.questions.length) {
@@ -705,7 +733,7 @@ export function PanelPlayer({ owner, stories: chosenStories, preferences, langua
   }
 
   const closeLabel = phase === 'playing' && running ? 'Stop briefing' : 'Close briefing'
-  const playbackLabel = speaker ? 'Pause briefing' : 'Play briefing'
+  const playbackLabel = soundBlocked ? 'Enable sound' : speaker ? 'Pause briefing' : 'Play briefing'
   const loading = phase !== 'setup' && !begun && running
   const storyCount = stories.filter(story => story.id !== 'planning').length
   const prepSteps: PrepStep[] = [
@@ -726,12 +754,14 @@ export function PanelPlayer({ owner, stories: chosenStories, preferences, langua
           <h1 id="room-title">Your briefing</h1>
           <p className="sr-only">{recorded ? 'Recorded sample' : realtimeMode ? 'Live speech-to-speech' : 'Synthetic narration'}{sample ? ' · Fictional reporting' : ''}</p>
           <div className="session-controls" role="group" aria-label="Briefing controls">
-            <button type="button" className="playback-toggle" disabled={!active} aria-label={playbackLabel} title={playbackLabel} onClick={() => {
+            {(!realtimeMode || !begun || soundBlocked) && <button type="button" className="playback-toggle" data-enable-sound={soundBlocked}
+              disabled={realtimeMode ? !soundBlocked : !active} aria-label={playbackLabel} title={playbackLabel} onClick={() => {
+              if (realtimeMode) { rt.current?.retryAudio?.(); return }
               const audio = player.current
               if (!audio) return
               if (!audio.paused) audio.pause()
               else void audio.play().catch(() => setStatus('Press play to listen.'))
-            }}><Icon name={speaker ? 'pause' : 'play'} /></button>
+            }}>{soundBlocked ? playbackLabel : <Icon name={speaker ? 'pause' : 'play'} />}</button>}
             <button type="button" autoFocus onClick={onClose} className="room-close" aria-label={closeLabel} title={closeLabel}><Icon name="stop" /></button>
           </div>
         </header>
@@ -757,7 +787,7 @@ export function PanelPlayer({ owner, stories: chosenStories, preferences, langua
       </AgentStage>
       {begun && <h2 className="session-headline">{stories[topic].title}</h2>}
       <div ref={consolePanel} className="session-console">
-      <p role="status" className={loading && status !== 'Press play to listen.' ? 'player-status sr-only' : 'player-status'}>{status || (loading ? 'Loading briefing…' : '')}</p>
+      <p role="status" className={loading && !soundBlocked && status !== 'Press play to listen.' ? 'player-status sr-only' : 'player-status'}>{status || (loading ? 'Loading briefing…' : '')}</p>
       {recorded && (phase !== 'playing' || loading) && <p className={loading ? 'setup-note invisible' : 'setup-note'}>Recorded preview · fixed audio and two experts. Dial settings apply to generated briefings.</p>}
       {saveError && <p role="alert">This browser could not save your briefing. Check the available device storage.</p>}
       <audio ref={player} aria-label="Synthetic briefing audio" hidden

@@ -45,7 +45,7 @@ async function check(browser) {
     export class RealtimeAgent {
       static async connect(info, model, mic, handlers) {
         let resolveTurn, words
-        return { info, context() {}, close() {}, startListening() {},
+        return { info, audio: { play: async () => {} }, context() {}, close() {}, startListening() {},
           stopListening() { handlers.onListenerText(window.panelQuestion) },
           speak(text, seconds, onText) {
             handlers.onSpeaking(true)

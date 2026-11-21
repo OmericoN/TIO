@@ -97,10 +97,14 @@ with sync_playwright() as p:
         duration = page.get_by_role('slider', name='Duration')
         experts = page.get_by_role('slider', name='Expert participants')
         expect(duration).to_have_attribute('aria-valuenow', '4')
-        page.evaluate("""async testMicrophone => {
+        page.evaluate("""async ({testMicrophone, blockSound}) => {
           const module = performance.getEntriesByType('resource')
               .find(entry => new URL(entry.name).pathname === '/src/realtime.ts');
           const { RealtimeAgent } = await import(module.name);
+          let allowSound = !blockSound;
+          document.addEventListener('click', event => {
+            if (event.isTrusted && event.target.closest('[data-enable-sound="true"]')) allowSound = true;
+          }, true);
           navigator.mediaDevices.getUserMedia = async () => {
             if (!testMicrophone) throw new DOMException('Mocked microphone denial', 'NotAllowedError');
             const context = new AudioContext();
@@ -119,7 +123,9 @@ with sync_playwright() as p:
           RealtimeAgent.connect = async (info, _model, _microphone, handlers) => {
             let finish;
             return {
-              info, audio: {srcObject: window.testMic?.speaker}, speak: (_brief, _seconds, onText) => new Promise(resolve => {
+              info, audio: {srcObject: window.testMic?.speaker, async play() {
+                if (!allowSound) throw new DOMException('Mocked autoplay block', 'NotAllowedError');
+              }}, speak: (_brief, _seconds, onText) => new Promise(resolve => {
                 handlers.onSpeaking(true); finish = resolve;
                 window.mockSpeech = { transcript: onText, drain() {
                   handlers.onSpeaking(false);
@@ -134,7 +140,7 @@ with sync_playwright() as p:
               },
             };
           };
-        }""", width == 524)
+        }""", {'testMicrophone': width == 524, 'blockSound': width == 320})
         expect(experts).to_have_attribute('aria-valuenow', '2')
         controls = page.get_by_role('group', name='Briefing controls')
         expect(controls.get_by_role('button')).to_have_count(2)
@@ -205,6 +211,13 @@ with sync_playwright() as p:
         else:
             assert ring.evaluate("e => getComputedStyle(e, '::before').animationName") == 'none'
         opening_route.pop().fulfill(json=opening)
+        if width == 320:
+            enable_sound = controls.get_by_role('button', name='Enable sound')
+            expect(enable_sound).to_be_visible()
+            expect(page.get_by_role('list', name='Topic checkpoints')).to_have_count(0)
+            assert page.evaluate('window.mockSpeech === undefined')
+            enable_sound.tap()
+            expect(enable_sound).to_have_count(0)
         expect(page.get_by_role('list', name='Topic checkpoints')).to_be_visible()
         expect(orb).to_have_attribute('data-phase', 'ready')
         if width == 524:
@@ -249,14 +262,14 @@ with sync_playwright() as p:
         if width == 524:
             citations = page.get_by_role('region', name='Citations')
             facts = citations.get_by_role('list', name='Fact checks')
-            expect(citations.get_by_role('link', name='Sample Markets')).to_have_attribute('href', 'https://example.org/article')
-            expect(citations.get_by_text('Sample Economy', exact=True)).to_be_visible()
-            expect(facts).to_have_count(0)
-            page.evaluate("window.mockSpeech.transcript('The first verified fact.')")
-            expect(facts).to_have_count(0)
-            page.evaluate('window.mockSpeech.drain()')
+            outlets = citations.locator('.citation-outlets')
+            expect(outlets.get_by_role('link', name='Sample Markets')).to_have_attribute('href', 'https://example.org/article')
+            expect(outlets.get_by_text('Sample Economy', exact=True)).to_be_visible()
             claim = facts.get_by_role('link', name='The first verified fact.')
             expect(claim).to_be_visible()
+            expect(facts.locator('li[data-current]').get_by_role('link', name='The first verified fact.')).to_be_visible()
+            page.evaluate("window.mockSpeech.transcript('The first verified fact.')")
+            page.evaluate('window.mockSpeech.drain()')
             expect(page.locator('.guest-0')).to_have_attribute('data-speaking', 'true')
             assert page.locator('.session-inner').evaluate('e => e.scrollHeight <= e.clientHeight')
             expect(claim).to_have_attribute('href', 'https://example.org/article')
