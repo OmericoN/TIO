@@ -111,7 +111,22 @@ export function PanelPlayer({ owner, stories, preferences, plan, recorded, origi
   const realtimeMode = !recorded  // whatever the saved format: a host plus guests, each a separate live voice
   const rt = useRef<{ agents: Map<string, RealtimeAgent>; host?: RealtimeAgent; microphone: MediaStream | null;
     current?: RealtimeAgent; listening: boolean; exchange: { role: 'listener' | 'host'; text: string }[];
-    quiet?: number; release?: () => void } | null>(null)
+    quiet?: number; duckTimer?: number; release?: () => void } | null>(null)
+
+  // The listener asked something (spoken or typed): stop whoever is talking and have the host answer live.
+  function listenerAsks(text: string) {
+    const state = rt.current
+    if (!state?.host) return
+    state.listening = true
+    clearTimeout(state.quiet)
+    state.current?.duck(1)
+    state.current?.cancel()
+    state.exchange.push({ role: 'listener', text })
+    save({ id: crypto.randomUUID(), speaker: 'Listener', text })
+    setStatus('Answering your question…')
+    state.host.answer(text)
+    state.quiet = window.setTimeout(() => { state.listening = false; state.release?.(); state.release = undefined }, 15000)
+  }
   const showSession = useRef<{ conversation?: Conversation; cue?: number; heardListener: number; ending: boolean;
     startedAt: number; story: string } | null>(null)
 
@@ -362,23 +377,24 @@ export function PanelPlayer({ owner, stories, preferences, plan, recorded, origi
     const hostInfo = agents.find(agent => agent.role === 'host')!
     const connected = await Promise.all(agents.map(info => RealtimeAgent.connect(info, model,
       info.role === 'host' ? microphone : null, info.role !== 'host' ? {} : {
+        // A sound only lowers the speaker's volume. It counts as the listener only once its transcript has real
+        // words, so noise or the speakers' own echo can't stop the panel or set the host talking.
         onListenerStart: () => {
           if (rt.current !== state) return
-          state.listening = true
-          clearTimeout(state.quiet)
-          if (state.current && state.current !== state.host) state.current.cancel()
-          setStatus('Listening…')
+          state.current?.duck(0.3)
+          clearTimeout(state.duckTimer)
+          state.duckTimer = window.setTimeout(() => state.current?.duck(1), 2500)
         },
         onListenerText: text => {
           if (rt.current !== state) return
-          state.exchange.push({ role: 'listener', text })
-          save({ id: crypto.randomUUID(), speaker: 'Listener', text })
-          quietThenResume(9000)  // in case the host doesn't reply
+          clearTimeout(state.duckTimer)
+          if (text.split(/\s+/).filter(word => /\w/.test(word)).length < 2) { state.current?.duck(1); return }
+          listenerAsks(text)
         },
         onReply: text => {
           if (rt.current !== state) return
           state.exchange.push({ role: 'host', text })
-          const line: Segment = { id: crypto.randomUUID(), story: story.title, speaker: hostInfo.name, host: hostInfo.name,
+          const line: Segment = { id: crypto.randomUUID(), story: story.title, speaker: `${hostInfo.name} · ${hostInfo.voice} · answering you`, host: hostInfo.name,
             guests: [], text, sources: [] }
           setActive(line)
           save(line)
@@ -641,15 +657,8 @@ export function PanelPlayer({ owner, stories, preferences, plan, recorded, origi
     {running && !recorded && <form className="flex flex-wrap gap-2" onSubmit={e => {
       e.preventDefault()
       const showing = showSession.current
-      const panel = rt.current
-      if (panel?.host && question.trim()) {  // realtime panel: the host answers typed questions out loud
-        save({ id: crypto.randomUUID(), speaker: 'Listener', text: question.trim() })
-        panel.exchange.push({ role: 'listener', text: question.trim() })
-        panel.listening = true
-        clearTimeout(panel.quiet)
-        if (panel.current && panel.current !== panel.host) panel.current.cancel()
-        panel.host.ask(question.trim())
-      } else if (showing?.conversation && question.trim()) {  // live host: typed questions go straight into the session
+      if (rt.current?.host && question.trim()) listenerAsks(question.trim())  // the host answers out loud
+      else if (showing?.conversation && question.trim()) {  // live host: typed questions go straight into the session
         save({ id: crypto.randomUUID(), speaker: 'Listener', text: question.trim() })
         showing.heardListener = Date.now()
         showing.conversation.sendUserMessage(question.trim())

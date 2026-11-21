@@ -628,7 +628,8 @@ async def realtime_next(key: UUID, step: RealtimeStep):
         token, brief, payload = result
         item.brief_pending = token, brief, payload["speaker"], payload["sources"]
         start_brief_prefetch(item)
-        return {**payload, "context": context}
+        # The host always knows the current story, even before anyone has spoken.
+        return {**payload, "context": context or realtime.context_update(item.panel)}
     except (ValueError, RuntimeError, OSError) as exc:
         log.warning("Realtime brief failed: %s: %s", type(exc).__name__, exc)
         raise HTTPException(502, "The next turn could not be planned.") from None

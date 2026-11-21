@@ -115,12 +115,14 @@ export class RealtimeAgent {
       content: [{ type: 'input_text', text }] } })
   }
 
-  /** A typed listener question: the host answers it out loud like a spoken one. */
-  ask(text: string) {
-    this.send({ type: 'conversation.item.create', item: { type: 'message', role: 'user',
-      content: [{ type: 'input_text', text }] } })
-    this.send({ type: 'response.create' })
+  /** The host answers the listener out loud (spoken questions arrive transcribed; typed ones as they are). */
+  answer(question: string) {
+    this.send({ type: 'response.create', response: { instructions:
+      `LISTENER QUESTION: "${question}". Answer them now, following your instructions and your latest CONTEXT UPDATE.` } })
   }
+
+  /** Lowers or restores this agent's volume, e.g. while checking whether a sound is the listener talking. */
+  duck(volume: number) { this.audio.volume = volume }
 
   close() {
     this.finish(true)

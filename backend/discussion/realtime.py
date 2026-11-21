@@ -44,11 +44,16 @@ def agent_instructions(panel, persona_id):
     persona = panel.personas[persona_id]
     host = persona_id == panel.host
     habits = "; ".join(persona.catchphrases or [])
-    listener = ("""
+    stories = "\n".join(f"- {s.headline}" for s in panel.stories)
+    listener = (f"""
 # When the listener speaks
-You hear the listener directly. Answer them at once from your latest context update: answer a question in your
-first sentence, re-explain simply if they're lost, offer to move on if they're bored. Two or three sentences, then
-stop; the panel resumes on its own. If the context doesn't cover it, say so plainly.""" if host else "")
+You'll get a LISTENER QUESTION message with what they said. Answer from your latest CONTEXT UPDATE: answer a
+question in your first sentence, re-explain simply if they're lost, offer to move on if they're bored. Two or three
+sentences, then stop; the panel resumes on its own. If the context doesn't cover it, say so plainly.
+
+# The only stories in this briefing
+{stories}
+Never talk about any other story.""" if host else "")
     return f"""You are {persona.name}, {"the host" if host else "a guest expert"} on TIO, a live audio news panel for
 one listener. You are speaking out loud.
 
@@ -57,7 +62,8 @@ one listener. You are speaking out loud.
 Verbal habits: {habits or "none"}
 
 # How you speak
-- You speak only when you receive a TURN BRIEF (or, as the host, when the listener talks to you).
+- You speak only when you receive a TURN BRIEF (or, as the host, a LISTENER QUESTION). Never start on your own.
+- The panel is only the people named in your briefs. Never invent other guests or stories.
 - Deliver the brief in your own words as natural spoken English with contractions: a real person talking, not a
   script. Keep within its time. Never read out the brief's labels and never mention the brief.
 - React to what the previous speaker said, by name, when the brief says so.
@@ -73,8 +79,10 @@ def create_agent_secret(panel, persona_id, voice):
     audio = {"output": {"voice": voice}}
     if persona_id == panel.host:  # only the host listens to the microphone
         audio["input"] = {"transcription": {"model": "gpt-4o-mini-transcribe"},
-                          "turn_detection": {"type": "server_vad", "silence_duration_ms": 600,
-                                             "create_response": True, "interrupt_response": True}}
+                          # Never reply or stop on its own: background noise or the speakers' own echo would set it
+                          # off with no context. The player decides, once a real question has been transcribed.
+                          "turn_detection": {"type": "semantic_vad", "eagerness": "low",
+                                             "create_response": False, "interrupt_response": False}}
     else:
         audio["input"] = {"turn_detection": None}
     body = {"session": {"type": "realtime", "model": REALTIME_MODEL,
@@ -148,10 +156,11 @@ def brief_turn(brief, text=None):
     return Turn(text=text or " ".join(brief.points), citations=[], handoff=brief.handoff, action=brief.action)
 
 
-def context_update(panel, speaker_name, text):
-    """A note for the host agent after each line, so it can answer the listener at any moment."""
+def context_update(panel, speaker_name=None, text=None):
+    """A note for the host agent before and after each line, so it can answer the listener at any moment."""
     cards = "\n".join(f"- [{c['id']}] {c['point']}" for c in story_cards(panel)) if panel.index < len(panel.stories) \
         else "(the briefing has finished)"
     story = panel.story.headline if panel.index < len(panel.stories) else "none"
-    return (f"CONTEXT UPDATE (not the listener). Current story: {story}. {speaker_name} just said: \"{text}\".\n"
+    said = f" {speaker_name} just said: \"{text}\"." if speaker_name and text else ""
+    return (f"CONTEXT UPDATE (not the listener). Current story: {story}.{said}\n"
             f"Facts for this story:\n{cards}\nListener style: {'; '.join(panel.listener_style) or 'none yet'}")
