@@ -44,7 +44,26 @@ with sync_playwright() as p:
         page.route('**/api/panel/test/events', turn)
         page.route('**/api/panel/test', lambda r: r.fulfill(status=204))
         page.goto('http://localhost:5173/demo')
-        page.get_by_role('button', name='Include', exact=False).click()
+        select_article = page.get_by_role('button', name='Select article: A briefing topic')
+        if width == 320:
+            card = page.locator('.selectable-stories article')
+            expect(card).to_have_attribute('data-swipe-open', 'false')
+            rect = card.bounding_box()
+            x, y = rect['x'] + rect['width'] / 2, rect['y'] + rect['height'] / 2
+            touch = page.context.new_cdp_session(page)
+            touch.send('Input.dispatchTouchEvent', {'type': 'touchStart', 'touchPoints': [{'x': x, 'y': y}]})
+            touch.send('Input.dispatchTouchEvent', {'type': 'touchMove', 'touchPoints': [{'x': x - 60, 'y': y}]})
+            touch.send('Input.dispatchTouchEvent', {'type': 'touchEnd', 'touchPoints': []})
+            expect(card).to_have_attribute('data-swipe-open', 'true')
+            expect(select_article).to_have_attribute('aria-pressed', 'false')
+            select_article.tap()
+            expect(card).to_have_attribute('data-swipe-open', 'false')
+        else:
+            select_article.click()
+        expect(select_article).to_have_attribute('aria-pressed', 'true')
+        select_article.press('Space')
+        expect(select_article).to_have_attribute('aria-pressed', 'false')
+        select_article.press('Enter')
         page.get_by_role('button', name='Start agent discussion').click()
         duration = page.get_by_role('slider', name='Duration')
         experts = page.get_by_role('slider', name='Expert participants')
@@ -128,13 +147,14 @@ with sync_playwright() as p:
         page.route('**/api/panel', capture)
         page.goto('http://localhost:5173/demo')
         expect(page.locator('.story-grid article')).to_have_count(2 if preview else 1)
-        if not preview:
-            page.get_by_role('button', name='Profile', exact=True).click()
-            page.get_by_label('Format').select_option('presenter')
-            page.get_by_role('button', name='Save preferences').click()
-            page.get_by_role('button', name='News feed', exact=True).click()
-        page.get_by_role('button', name='Include', exact=False).first.click()
+        page.get_by_role('button', name='Select article:', exact=False).first.click()
         page.get_by_role('button', name='Start agent discussion').click()
+        if preview:
+            page.get_by_label('Playback').select_option('live')
+            expect(page.get_by_label('Format')).to_be_visible()
+            page.get_by_label('Playback').select_option('sample')
+        else:
+            page.get_by_label('Format').select_option('presenter')
         slider = page.get_by_role('slider', name='Expert participants')
         expect(slider).to_have_attribute('aria-disabled', 'false')
         x, y = point(slider, 90, lower=True)
@@ -156,8 +176,6 @@ with sync_playwright() as p:
             expect(page.get_by_role('dialog').get_by_role('status')).to_have_text('Test endpoint reached')
             assert starts[0]['mode'] == 'panel' and starts[0]['expert_count'] == 4
             page.keyboard.press('Escape')
-            page.get_by_role('button', name='Profile', exact=True).click()
-            expect(page.get_by_label('Format')).to_have_value('presenter')
         print(f'{"Recorded preview" if preview else "Presenter session"}: expert dial, thick progress and leading tick, focus cue and format handling passed', flush=True)
         page.close()
 
@@ -173,7 +191,7 @@ with sync_playwright() as p:
 
         page.route('**/api/panel', rejected)
         page.goto('http://localhost:5173/demo')
-        page.get_by_role('button', name='Include', exact=False).click()
+        page.get_by_role('button', name='Select article:', exact=False).click()
         page.get_by_role('button', name='Start agent discussion').click()
         page.get_by_role('slider', name='Expert participants').press('End')
         page.get_by_role('button', name='Begin briefing').click()

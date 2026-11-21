@@ -5,6 +5,7 @@ import { NewsWorkspace } from './NewsWorkspace'
 import { sampleArticle } from './briefings'
 import { AudioRibbon, Brand } from './Brand'
 import { VoiceAuditions } from './VoiceAuditions'
+import { InterestFields } from './InterestFields'
 import './styles.css'
 
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL?.trim().replace(/\/+$/, '')
@@ -16,15 +17,6 @@ const externalTermsUrl = import.meta.env.VITE_TERMS_URL?.trim()
 const bundledTermsPath = '/terms-v1.html'
 const termsUrl = externalTermsUrl?.startsWith('https://') ? externalTermsUrl : bundledTermsPath
 const fieldClass = 'form-field'
-const interestOptions = [
-  'Stock markets', 'Technology', 'Central banks and inflation',
-  'Currencies', 'Energy and commodities', 'Company earnings',
-  'Artificial intelligence', 'Climate and clean energy', 'Science and space',
-  'Health and biotech', 'Housing and real estate', 'Jobs and the economy',
-  'Personal finance', 'Startups and entrepreneurship', 'Global trade',
-  'Politics and geopolitics', 'Food and agriculture', 'Transport and mobility',
-  'Media and entertainment', 'Sports business',
-]
 
 function OnboardingFields({ step }: { step: number }) {
   return (
@@ -81,19 +73,7 @@ function OnboardingFields({ step }: { step: number }) {
             </select>
           </label>
         </div>
-        <fieldset className="interest-options">
-          <legend className="mb-2 text-sm font-medium">Which topics interest you?</legend>
-          {interestOptions.map(interest => (
-            <label key={interest} className="interest-choice">
-              <input type="checkbox" name="interests" value={interest} />
-              {interest}
-            </label>
-          ))}
-          <label className="block text-sm font-medium">
-            Other interests (optional)
-            <input name="other_interests" type="text" maxLength={300} className={fieldClass} />
-          </label>
-        </fieldset>
+        <InterestFields />
       </fieldset>
     </>
   )
@@ -112,7 +92,7 @@ function TermsAgreement() {
 }
 
 function App() {
-  const [owner, setOwner] = useState('')
+  const [account, setAccount] = useState<{ owner: string; onboarding: unknown }>()
   const [pending, setPending] = useState(false)
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
@@ -272,7 +252,8 @@ function App() {
         setError('Sign-in failed. Try again.')
         return
       }
-      setOwner('account-' + (session.user?.id || email.toLowerCase()))
+      setAccount({ owner: 'account-' + (session.user?.id || email.toLowerCase()),
+        onboarding: session.user?.user_metadata?.tio_onboarding ?? data?.tio_onboarding })
     } catch {
       setError('Could not reach Supabase. Try again.')
     } finally {
@@ -280,7 +261,7 @@ function App() {
     }
   }
 
-  if (owner) return <main><NewsWorkspace owner={owner} /></main>
+  if (account) return <main><NewsWorkspace {...account} /></main>
 
   return (
     <main className="auth-page">

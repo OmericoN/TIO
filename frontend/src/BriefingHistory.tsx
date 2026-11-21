@@ -54,7 +54,7 @@ export function Briefings({ owner }: { owner: string }) {
     return () => { mounted = false }
   }, [owner])
   return <>
-    <div className="page-title"><h1>Briefings</h1><span className="edition-note">On this device</span></div>
+    <div className="page-title"><h1>Briefings</h1></div>
     {error && <p role="alert">{error}</p>}
     {!ready && !error && <p role="status">Opening your briefings…</p>}
     {ready && !sessions.length && <div className="history-empty"><h2>Your conversations live here.</h2><p>Choose a headline in News feed and start a briefing with the host. You can return here to listen again or read the sources.</p></div>}

@@ -8,9 +8,10 @@ type Persona = { id: string; name: string; tagline: string; can_preview: boolean
 type Props = {
   selectedIds: string[]
   onToggle: (id: string) => void
+  suspended?: boolean
 }
 
-export function VoiceAuditions({ selectedIds, onToggle }: Props) {
+export function VoiceAuditions({ selectedIds, onToggle, suspended = false }: Props) {
   const audioRef = useRef<HTMLAudioElement>(null)
   const previewRequest = useRef<AbortController | null>(null)
   const [voices, setVoices] = useState<Persona[]>([])
@@ -102,9 +103,9 @@ export function VoiceAuditions({ selectedIds, onToggle }: Props) {
     setPlayingId('')
     setLoadingId('')
     setError('')
-    if (voice?.can_preview) void playPreview(voice)
+    if (!suspended && voice?.can_preview) void playPreview(voice)
     return () => { previewRequest.current?.abort(); audio?.pause() }
-  }, [voice?.id])
+  }, [voice?.id, suspended])
 
   const selected = voice ? selectedIds.includes(voice.id) : false
   // A large hue step keeps neighboring voices visually distinct.

@@ -124,4 +124,70 @@ with sync_playwright() as p:
     page.get_by_role('button', name='Continue', exact=True).click()
     expect(page.get_by_label('Email', exact=True)).to_be_visible()
     print('Unavailable catalog: clear status and optional voice selection passed')
+    page.close()
+
+    page = browser.new_page(viewport={'width': 537, 'height': 770}, reduced_motion='reduce')
+    page.route('**/api/voice/catalog', lambda route: route.fulfill(json=VOICES))
+    page.route('**/api/voice/catalog/*/preview', lambda route: route.fulfill(json={'url': '/voices/rates-open.wav'}))
+    page.route('**/api/panel/stories', lambda route: route.fulfill(json={'sample': True, 'stories': []}))
+
+    def sign_in(route):
+        email = route.request.post_data_json['email']
+        route.fulfill(json={'access_token': 'test-session', 'user': {'id': email, 'user_metadata': {
+            'tio_onboarding': {'interests_text': 'Technology, Urban planning', 'preferred_persona_ids': [ADA]}
+        }}})
+
+    page.route('**/auth/v1/token?grant_type=password', sign_in)
+
+    def open_profile(email):
+        page.goto('http://localhost:5173/')
+        page.get_by_label('Email', exact=True).fill(email)
+        page.get_by_label('Password', exact=True).fill('Example-password-123!')
+        page.get_by_role('button', name='Sign in', exact=True).click()
+        page.get_by_role('button', name='Profile', exact=True).click()
+        expect(page.get_by_role('heading', name='Profile', exact=True)).to_be_visible()
+
+    first_email = 'profile-one@example.invalid'
+    open_profile(first_email)
+    expect(page.locator('.workspace .masthead')).to_have_count(0)
+    expect(page.get_by_text('On this device', exact=True)).to_have_count(0)
+    expect(page.get_by_label('Listener profile')).to_have_count(0)
+    expect(page.get_by_label('Playback')).to_have_count(0)
+    appearance = page.get_by_role('region', name='Appearance')
+    assert appearance.bounding_box()['y'] < page.locator('.interest-options').bounding_box()['y']
+    expect(page.get_by_label('Technology', exact=True)).to_be_checked()
+    expect(page.get_by_label('Other interests (optional)')).to_have_value('Urban planning')
+    saved = page.locator('.saved-voices')
+    expect(saved.get_by_text('Ada', exact=True)).to_be_visible()
+    page.get_by_label('Technology', exact=True).uncheck()
+    page.get_by_label('Company earnings', exact=True).check()
+    page.get_by_label('Other interests (optional)').fill('City budgets')
+    saved.get_by_role('button', name='Remove Ada from saved voices').click()
+    page.get_by_role('button', name='Briefings', exact=True).click()
+    expect(page.get_by_role('heading', name='Briefings', exact=True)).to_be_visible()
+    expect(page.locator('.workspace .masthead')).to_have_count(0)
+    page.get_by_role('button', name='News feed', exact=True).click()
+    expect(page.locator('.workspace .masthead')).to_be_visible()
+    open_profile(first_email)
+    expect(page.get_by_label('Technology', exact=True)).not_to_be_checked()
+    expect(page.get_by_label('Company earnings', exact=True)).to_be_checked()
+    expect(page.get_by_label('Other interests (optional)')).to_have_value('City budgets')
+    expect(saved.get_by_text('Ada', exact=True)).to_have_count(0)
+    page.get_by_role('button', name='News feed', exact=True).click()
+    page.get_by_role('button', name='Select article:', exact=False).first.click()
+    page.get_by_role('button', name='Start agent discussion').click()
+    page.get_by_label('Playback').select_option('live')
+    page.route('**/api/panel', lambda route: route.fulfill(status=503, json={'detail': 'Test endpoint reached'}))
+    with page.expect_request('**/api/panel') as start:
+        page.get_by_role('button', name='Begin briefing').click()
+    assert 'Company earnings, City budgets' in start.value.post_data_json['profile']
+    open_profile('profile-two@example.invalid')
+    expect(page.get_by_label('Technology', exact=True)).to_be_checked()
+    expect(page.get_by_label('Company earnings', exact=True)).not_to_be_checked()
+    expect(saved.get_by_text('Ada', exact=True)).to_be_visible()
+    page.goto('http://localhost:5173/demo')
+    page.get_by_role('button', name='Profile', exact=True).click()
+    expect(page.get_by_label('Technology', exact=True)).not_to_be_checked()
+    expect(saved.get_by_text('Ada', exact=True)).to_have_count(0)
+    print('Profile: layout, signup defaults, autosave, and account/demo isolation passed')
     browser.close()
