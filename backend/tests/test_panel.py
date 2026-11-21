@@ -503,3 +503,19 @@ class ShowStructureTest(unittest.TestCase):
         panel.heard(line(f"Growth is real. {second}?", handoff=second), [], 10)
         target, _ = realtime.show_step(panel)
         self.assertEqual((panel.personas[panel.speaker()].name, target), (second, None))
+
+
+class RealtimeRoleTest(unittest.TestCase):
+    def test_guests_are_told_they_are_not_the_host(self):
+        from discussion import realtime
+        panel = fixture()
+        guest = panel.roster[0]
+        host_name = panel.personas[panel.host].name
+        self.assertIn("Your role: HOST", realtime.agent_instructions(panel, panel.host))
+        instructions = realtime.agent_instructions(panel, guest)
+        self.assertIn("Your role: GUEST EXPERT", instructions)
+        self.assertIn(f"{host_name} is the host", instructions)
+        panel.heard(line("Welcome. What stands out?", handoff=panel.personas[guest].name), [], 5)
+        brief = realtime.TurnBrief(goal="Answer", points=["Growth"], card_ids=[], handoff=None, action="respond",
+                                   max_seconds=12)
+        self.assertIn("You are a GUEST, not the host", realtime.render_brief(panel, brief))

@@ -123,8 +123,19 @@ sentences, then stop; the panel resumes on its own. If the context doesn't cover
 # The only stories in this briefing
 {stories}
 Never talk about any other story.""" if host else "")
+    host_name = panel.personas[panel.host].name
+    role = (f"""# Your role: HOST
+You are the host and moderator. You open the show, introduce the guests and each story, ask the guests questions,
+probe disagreements, close each story and sign off.""" if host else f"""# Your role: GUEST EXPERT
+{host_name} is the host. You are a guest: you answer the questions you're asked, give your expert view and react to
+the other guests. You never welcome the listener, introduce yourself, the guests or a story, move the show to the
+next story, wrap a story up, thank people for listening or sign off; that is {host_name}'s job. You don't say
+"our panel", "welcome" or "today on the show". If your persona text describes you as a host or presenter, that is
+only your speaking style, not your role here.""")
     return f"""You are {persona.name}, {"the host" if host else "a guest expert"} on TIO, a live audio news panel for
 one listener. You are speaking out loud.
+
+{role}
 
 # Your persona
 {(persona.system_prompt or persona.personality_md or "")[:1500]}
@@ -237,7 +248,8 @@ def make_brief(panel):
 ## The show's structure (fixed)
 
 data.this_turn says exactly what this turn is for in the show's running order. Plan the brief to do that and only
-that, with handoff to the person it names.
+that, with handoff to the person it names. When role is "guest", the brief is only the guest's expert answer and
+reaction: never plan a welcome, introductions, a move to another story, a wrap-up or a sign-off for a guest.
 
 ## Your job here
 
@@ -266,7 +278,12 @@ def render_brief(panel, brief):
     _, direction = show_step(panel)
     last = next((line for line in reversed(panel.history) if line.speaker != panel.personas[panel.speaker()].name), None)
     heard = f'\nJust said by {last.speaker}: "{last.text}"' if last else ""
+    speaker = panel.speaker()
+    role = ("You are the HOST." if speaker == panel.host
+            else f"You are a GUEST, not the host: {panel.personas[panel.host].name} hosts. Don't welcome, introduce, "
+                 "change the story or wrap up.")
     return f"""TURN BRIEF
+{role}
 Story: {panel.story.headline}{heard}
 Your part in the show right now: {direction}
 Goal: {brief.goal}
