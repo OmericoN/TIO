@@ -2,14 +2,17 @@ import { useEffect, useRef, useState } from 'react'
 import { audioUrl, historyStore, sampleArticle } from './briefings'
 import type { Briefing, Card, Segment } from './briefings'
 
-export function Sources({ cards }: { cards: Card[] }) {
+export function Sources({ cards, compact = false }: { cards: Card[]; compact?: boolean }) {
   if (!cards.length) return null
-  return <aside className="sources" aria-label="Supporting sources"><h3>Supporting sources</h3>
+  return <aside className={compact ? 'fact-check glass-card' : 'sources'} aria-label={compact ? 'Fact check' : 'Supporting sources'}>
+    <h3>{compact ? 'Fact check' : 'Supporting sources'}</h3>
+    {compact && <p className="fact-claim">{cards[0].claim}</p>}
     {cards.map((s, i) => {
       const url = s.url ?? (sampleArticle(s.id) ? '/sample-source?id=' + encodeURIComponent(s.id) : null)
       return <blockquote key={i}>
       <cite>{url ? <a href={url} target="_blank" rel="noreferrer">{s.publisher}</a> : s.publisher}</cite>
-      <p><strong>{s.claim}</strong></p><p lang={s.language}>“{s.quote}”</p>
+      {compact ? <details><summary>Source excerpt</summary><p lang={s.language}>“{s.quote}”</p></details>
+        : <><p><strong>{s.claim}</strong></p><p lang={s.language}>“{s.quote}”</p></>}
       </blockquote>
     })}
   </aside>
@@ -55,7 +58,7 @@ export function Briefings({ owner }: { owner: string }) {
     {error && <p role="alert">{error}</p>}
     {!ready && !error && <p role="status">Opening your briefings…</p>}
     {ready && !sessions.length && <div className="history-empty"><h2>Your conversations live here.</h2><p>Choose a headline in News feed and start a briefing with the host. You can return here to listen again or read the sources.</p></div>}
-    {sessions.map(s => <section className="history-item" key={s.id}>
+    {sessions.map(s => <section className="history-item glass-card" key={s.id}>
       <button className="history-title" aria-expanded={open === s.id} onClick={() => setOpen(open === s.id ? '' : s.id)}>
         <span>{new Date(s.date).toLocaleString()} · {s.sample ? 'Sample briefing' : 'Briefing'}</span>
         <strong>{s.titles.join(' · ')}</strong>

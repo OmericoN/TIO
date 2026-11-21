@@ -75,7 +75,7 @@ def load_panel_sources(article_ids, persona_ids):
     return articles, personas, host
 
 
-def matched_panel(result: CompletedMatch, profile, mode, minutes, client):
+def matched_panel(result: CompletedMatch, profile, mode, minutes, client, expert_count=2):
     tones = {}
     for entry in result.articles:
         article_id = entry["article_id"]
@@ -93,7 +93,7 @@ def matched_panel(result: CompletedMatch, profile, mode, minutes, client):
     groups = group_articles([articles[i] for i in tones], client, stage="session_grouping")
     groups.sort(key=lambda story: min(rank[a.id] for a in story.articles))
     stories = groups[:topic_limit(minutes)]
-    roster = result.agent_ids[:2] if mode == "panel" else []
+    roster = result.agent_ids[:expert_count] if mode == "panel" else []
     return Panel(stories, personas, host, {s.id: roster for s in stories}, profile, mode, minutes,
                  tones={s.id: [tones[a.id] for a in s.articles] for s in stories})
 

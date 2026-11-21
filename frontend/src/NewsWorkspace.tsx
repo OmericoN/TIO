@@ -49,11 +49,13 @@ export function NewsWorkspace({ owner, listenerId }: { owner: string; listenerId
   const [preferences, setPreferences] = useState<Preferences>(savedSettings?.preferences ?? { profile: defaultProfile, mode: 'panel', minutes: 4 })
   const [picks, setPicks] = useState<Record<string, boolean>>({})
   const [notice, setNotice] = useState('')
+  const [agentNotice, setAgentNotice] = useState('')
   const [question, setQuestion] = useState('')
   const [submittedQuestion, setSubmittedQuestion] = useState('')
   const [launch, setLaunch] = useState<{ x: number; y: number; context: AudioContext | null; prepared?: PreparedBriefing } | null>(null)
   const [briefingError, setBriefingError] = useState('')
   const trigger = useRef<HTMLButtonElement>(null)
+  const agentControl = useRef<HTMLDivElement>(null)
   const drag = useRef<{ id: number; x: number; y: number } | null>(null)
   const userId = listenerId || demoListener
   const waitingForCatalog = demo && demoListeners === null
@@ -129,11 +131,29 @@ export function NewsWorkspace({ owner, listenerId }: { owner: string; listenerId
     }
   }, [demo])
 
+  useEffect(() => {
+    if (!agentNotice) return
+    function dismissOutside(event: PointerEvent) {
+      if (!agentControl.current?.contains(event.target as Node)) setAgentNotice('')
+    }
+    function dismissEscape(event: KeyboardEvent) {
+      if (event.key === 'Escape') setAgentNotice('')
+    }
+    document.addEventListener('pointerdown', dismissOutside)
+    document.addEventListener('keydown', dismissEscape)
+    return () => {
+      document.removeEventListener('pointerdown', dismissOutside)
+      document.removeEventListener('keydown', dismissEscape)
+    }
+  }, [agentNotice])
+
   function choose(story: Headline, include: boolean) {
     if (include && !picks[story.id] && selected.length >= 6) {
       setNotice('Your lineup holds six headlines. Remove one before adding another.')
+      setAgentNotice('Your lineup holds six headlines. Remove one before adding another.')
       return
     }
+    setAgentNotice('')
     setPicks(previous => ({ ...previous, [story.id]: include }))
     setNotice((include ? 'Included ' : 'Skipped ') + story.title)
   }
@@ -141,13 +161,16 @@ export function NewsWorkspace({ owner, listenerId }: { owner: string; listenerId
   async function start() {
     if (preparing) return
     if (!selected.length || (!recorded && ((!userId && !preferences.profile.trim()) || !Number.isInteger(preferences.minutes) || preferences.minutes < 1 || preferences.minutes > 15))) {
-      setView(selected.length ? 'profile' : 'feed')
-      setNotice(selected.length ? 'Check the listener profile and briefing length.' : 'Choose at least one headline to start your briefing.')
-      requestAnimationFrame(() => (selected.length ? document.querySelector<HTMLTextAreaElement>('.profile-settings textarea')?.focus() : document.getElementById('stories-title')?.scrollIntoView({ block: 'center' })))
+      const message = selected.length ? 'Check the listener profile and briefing length in Profile.' : 'Choose at least one headline to start your briefing.'
+      setNotice(message)
+      setAgentNotice(message)
       return
     }
+    setAgentNotice('')
     const rect = trigger.current!.getBoundingClientRect()
-    const origin = { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2, context: null }
+    let context: AudioContext | null = null
+    try { context = new AudioContext(); void context.resume().catch(() => {}) } catch { /* Native playback still works. */ }
+    const origin = { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2, context }
     setBriefingError('')
     if (userId) {
       setPreparing(true)
@@ -171,15 +194,14 @@ export function NewsWorkspace({ owner, listenerId }: { owner: string; listenerId
           plan: { segments, hosts, tones },
         } })
       } catch (error) {
+        if (context && context.state !== 'closed') void context.close().catch(() => {})
         setBriefingError(error instanceof Error ? error.message : 'The briefing could not be generated.')
       } finally {
         setPreparing(false)
       }
       return
     }
-    let context = null
-    try { context = new AudioContext(); void context.resume().catch(() => {}) } catch { /* Native playback still works. */ }
-    setLaunch({ ...origin, context })
+    setLaunch(origin)
   }
 
   return <div className="workspace">
@@ -203,9 +225,19 @@ export function NewsWorkspace({ owner, listenerId }: { owner: string; listenerId
       </form>
     </div>}
     <div className="workspace-dock">
-      <button ref={trigger} type="button" className="agent-launch" aria-label="Start agent discussion" title="Start agent discussion" disabled={preparing} onFocus={() => void loadPlayer()} onPointerEnter={() => void loadPlayer()} onClick={start}>
+      <div ref={agentControl} className="agent-control" onPointerLeave={event => {
+        if (event.pointerType !== 'touch') setAgentNotice('')
+      }} onBlur={event => {
+        if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setAgentNotice('')
+      }}>
+      {agentNotice && <div id="agent-notice" className="agent-notice" role="tooltip">{agentNotice}</div>}
+      <button ref={trigger} type="button" className="agent-launch" aria-label="Start agent discussion"
+        disabled={preparing} aria-describedby={agentNotice ? 'agent-notice' : undefined}
+        onFocus={() => void loadPlayer()} onPointerEnter={() => void loadPlayer()} onClick={start}>
         <Orb />{selected.length > 0 && <small aria-hidden="true">{selected.length}</small>}
+        {agentNotice && <span className="agent-info" aria-hidden="true">i</span>}
       </button>
+      </div>
       <nav aria-label="Workspace" className="workspace-nav">
         {(['feed', 'briefings', 'profile'] as const).map(id => <button type="button" key={id} aria-current={view === id ? 'page' : undefined} onClick={() => { setView(id); window.scrollTo(0, 0) }}>
           <Icon name={id === 'feed' ? 'feed' : id === 'profile' ? 'profile' : 'discussion'} />{id === 'feed' ? 'News feed' : id === 'profile' ? 'Profile' : 'Briefings'}
@@ -238,12 +270,12 @@ export function NewsWorkspace({ owner, listenerId }: { owner: string; listenerId
           </select>
         </div>}
         {preparing && <p role="status">Generating your briefing…</p>}
-        <span role="status" className={notice.startsWith('Your lineup') || notice.startsWith('Choose') || notice.startsWith('Check') ? 'selection-notice' : 'sr-only'}>{notice}</span>
+        <span role="status" className="sr-only">{notice}</span>
         <section aria-labelledby="stories-title">
           <div className="section-title"><h2 id="stories-title">{userId ? 'Recommended articles' : 'Top articles'}</h2></div>
           {feedError && <p role="alert">{feedError}</p>}
           <ul className="story-grid selectable-stories">{stories.map(story => <li key={story.id}>
-            <article data-choice={picks[story.id] === undefined ? undefined : picks[story.id] ? 'include' : 'skip'}
+            <article className="glass-card" data-choice={picks[story.id] === undefined ? undefined : picks[story.id] ? 'include' : 'skip'}
               onPointerDown={e => {
                 if (preparing || !e.isPrimary || e.button !== 0 || (e.target as HTMLElement).closest('button')) return
                 drag.current = { id: e.pointerId, x: e.clientX, y: e.clientY }

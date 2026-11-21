@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useRef } from 'react'
-import type { RefObject } from 'react'
+import type { ReactNode, RefObject } from 'react'
 import { Orb } from './Orb'
 
 type Props = {
@@ -8,24 +8,31 @@ type Props = {
   host: string
   guests: string[]
   speaker: string
+  onConfirm?: () => void
+  confirming?: boolean
+  children?: ReactNode
 }
 
-export function AgentStage({ origin, audio, host, guests, speaker }: Props) {
+export function AgentStage({ origin, audio, host, guests, speaker, onConfirm, confirming, children }: Props) {
   const stage = useRef<HTMLDivElement>(null)
   const hostBody = useRef<HTMLDivElement>(null)
   useLayoutEffect(() => {
+    let entrance: Animation | undefined
     // The parent opens the native dialog in its layout effect.
     const frame = requestAnimationFrame(() => {
       if (matchMedia('(prefers-reduced-motion: reduce)').matches || !hostBody.current) return
       const rect = hostBody.current.getBoundingClientRect()
       const x = rect.left + rect.width / 2, y = rect.top + rect.height / 2
-      hostBody.current.animate([
-        { transform: `translate(${origin.x - x}px,${origin.y - y}px) scale(${56 / rect.width})` },
-        { transform: `translate(${innerWidth / 2 - x}px,${innerHeight / 2 - y}px) scale(1.16)`, offset: .62 },
+      const dx = origin.x - x, dy = origin.y - y
+      entrance = hostBody.current.animate([
+        { transform: `translate(${dx}px,${dy}px) scale(${56 / rect.width})`, easing: 'cubic-bezier(.77,0,.175,1)' },
+        { transform: `translate(${dx * .08}px,${dy * .06}px) scale(.98,1.08) rotate(4deg)`, offset: .6, easing: 'cubic-bezier(.23,1,.32,1)' },
+        { transform: 'translateY(-12px) scale(1.1,.94) rotate(-2deg)', offset: .78, easing: 'cubic-bezier(.23,1,.32,1)' },
+        { transform: 'translateY(4px) scale(.985,1.03) rotate(1deg)', offset: .9, easing: 'cubic-bezier(.23,1,.32,1)' },
         { transform: 'none' },
-      ], { duration: 900, easing: 'cubic-bezier(.22,.68,.2,1)', fill: 'backwards' })
+      ], { duration: 1600, easing: 'linear', fill: 'backwards' })
     })
-    return () => cancelAnimationFrame(frame)
+    return () => { cancelAnimationFrame(frame); entrance?.cancel() }
   }, [origin])
 
   useEffect(() => {
@@ -88,7 +95,10 @@ export function AgentStage({ origin, audio, host, guests, speaker }: Props) {
   }, [audio, origin])
 
   return <div ref={stage} className="agent-stage" aria-label="Discussion participants">
-    <div className="actor host" data-speaking={speaker === host}><div className="host-body" ref={hostBody}><div className="orb-meter"><Orb /></div></div><span>{host}</span></div>
+    {children}
+    <div className="actor host" data-speaking={speaker === host}><div className="host-body" ref={hostBody}><div className="orb-meter">
+      {onConfirm ? <button type="button" className="agent-launch host-confirm" aria-label="Begin briefing" disabled={confirming} onClick={onConfirm}><Orb /></button> : <Orb />}
+    </div></div><span>{onConfirm ? confirming ? 'Starting…' : 'Tap to begin' : host}</span></div>
     {guests.map((guest, index) => <div key={guest} className={'actor guest guest-' + index} data-speaking={speaker === guest}><div className="orb-meter"><Orb /></div><span>{guest}</span></div>)}
   </div>
 }

@@ -3,7 +3,7 @@ import unittest
 from datetime import datetime, timezone
 from unittest.mock import Mock, patch
 from urllib.error import HTTPError
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from fastapi import HTTPException
 from pydantic import ValidationError
@@ -182,6 +182,24 @@ class MatchedPanelTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(panel.speaker(), self.guests[0])
         self.assertEqual([a.id for a in panel.story.articles], article_ids)
         self.assertEqual(panel.roster, [])
+
+    async def test_completed_match_honors_explicit_expert_count(self):
+        extra = [self.source.personas[self.guests[0]].model_copy(update={"id": uuid4(), "slug": f"extra-{i}"}) for i in (3, 4)]
+        guests = [*self.guests, *(p.id for p in extra)]
+        cast = [*self.cast, *(p.model_dump() for p in extra)]
+        for count in (3, 4):
+            self.db.execute.side_effect = [cast, self.articles]
+            response = await api.start_panel(api.Start(profile="Listener", expert_count=count, match_result={
+                "articles": [dict(article_id=i, desired_tone="neutral") for i in self.ids], "agent_ids": guests,
+            }))
+            panel = api.sessions.pop(response["id"]).panel
+            self.assertEqual(panel.roster, guests[:count])
+        self.db.execute.side_effect = [self.cast, self.articles]
+        with self.assertRaises(HTTPException) as exc:
+            await api.start_panel(api.Start(profile="Listener", expert_count=4, match_result={
+                "articles": [dict(article_id=i, desired_tone="neutral") for i in self.ids], "agent_ids": self.guests,
+            }))
+        self.assertEqual(exc.exception.status_code, 422)
 
     async def test_invalid_handoff_fails_before_grouping(self):
         result = {"articles": [{"article_id": "missing", "desired_tone": "neutral"}], "agent_ids": []}
