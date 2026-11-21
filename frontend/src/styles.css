@@ -678,6 +678,7 @@ a { text-underline-offset: .2em; }
 .voice-save-orb { width: 100%; height: 100%; display: block; pointer-events: auto; }
 .voice-saved-check { position: absolute; right: 2px; bottom: 2px; display: grid; place-items: center; width: 26px; height: 26px; border-radius: 50%; background: var(--gold); color: #26362d; font-size: 14px; }
 .voice-preview-status { text-align: center; min-height: 20px; font-size: 12px; }
+.voice-preview-play { justify-self: center; }
 .saved-voices { margin-top: 24px; }
 .saved-voices h4 { margin-bottom: 10px; font-size: 16px; font-weight: 600; }
 .saved-voices h4 span { margin-left: 6px; }

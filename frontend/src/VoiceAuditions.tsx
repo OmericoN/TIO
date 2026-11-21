@@ -1,9 +1,9 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import type { CSSProperties } from 'react'
 import { Orb } from './Orb'
 import { Icon } from './Brand'
 
-type Persona = { id: string; name: string; tagline: string; can_preview: boolean }
+type Persona = { id: string; name: string; tagline: string; preview_url: string | null }
 
 type Props = {
   selectedIds: string[]
@@ -11,24 +11,61 @@ type Props = {
   suspended?: boolean
 }
 
-export function VoiceAuditions({ selectedIds, onToggle, suspended = false }: Props) {
+function VoiceSample({ voice, muted, selected, suspended }: {
+  voice: Persona; muted: boolean; selected: boolean; suspended: boolean
+}) {
   const audioRef = useRef<HTMLAudioElement>(null)
-  const previewRequest = useRef<AbortController | null>(null)
+  const attempt = useRef(0)
+  const [status, setStatus] = useState<'idle' | 'loading' | 'playing' | 'failed'>('idle')
+  const url = suspended ? null : voice.preview_url
+  const playSample = useCallback(async (replay = false) => {
+    const audio = audioRef.current
+    if (!audio || !url) return
+    const current = ++attempt.current
+    setStatus('loading')
+    try {
+      if (replay) audio.currentTime = 0
+      await audio.play()
+      if (attempt.current === current) setStatus('playing')
+    } catch (error) {
+      if (attempt.current !== current) return
+      setStatus(error instanceof DOMException && error.name === 'NotAllowedError' ? 'idle' : 'failed')
+    }
+  }, [url])
+
+  useEffect(() => {
+    const audio = audioRef.current
+    setStatus('idle')
+    void playSample()
+    return () => {
+      attempt.current += 1
+      audio?.pause()
+    }
+  }, [playSample])
+
+  return <>
+    {url && <button type="button" className="button voice-preview-play" onClick={() => void playSample(true)}>Play sample</button>}
+    <p className="voice-preview-status muted">{!voice.preview_url ? 'No preview available · '
+      : url && status === 'loading' ? 'Loading preview… · ' : url && status === 'playing' ? 'Previewing · ' : ''}
+    {selected ? 'Tap the orb to remove' : 'Tap the orb to save'}</p>
+    {url && status === 'failed' && <p role="alert" className="voice-preview-status text-red-700">Could not play the sample for {voice.name}.</p>}
+    <audio ref={audioRef} src={url ?? undefined} preload="none" muted={muted}
+      onEnded={() => setStatus('idle')} onError={() => { if (url) setStatus('failed') }} />
+  </>
+}
+
+export function VoiceAuditions({ selectedIds, onToggle, suspended = false }: Props) {
   const [voices, setVoices] = useState<Persona[]>([])
   const [activeIndex, setActiveIndex] = useState(0)
   const [paletteOffset] = useState(() => Math.floor(Math.random() * 360))
   const [slide, setSlide] = useState<{ direction: -1 | 1; outgoingHue: number } | null>(null)
   const [catalogStatus, setCatalogStatus] = useState('Loading voices…')
-  const [playingId, setPlayingId] = useState('')
-  const [loadingId, setLoadingId] = useState('')
-  const [error, setError] = useState('')
   const [muted, setMuted] = useState(false)
   const drag = useRef<{ x: number; y: number } | null>(null)
   const swiped = useRef(false)
 
   useEffect(() => {
     const request = new AbortController()
-    const audio = audioRef.current
 
     async function loadVoices() {
       try {
@@ -36,7 +73,9 @@ export function VoiceAuditions({ selectedIds, onToggle, suspended = false }: Pro
         if (!response.ok) throw new Error()
         const entries: Persona[] = await response.json()
         if (!Array.isArray(entries) || entries.some(voice => !voice || typeof voice.id !== 'string' || !voice.id.trim()
-          || typeof voice.name !== 'string' || typeof voice.tagline !== 'string' || typeof voice.can_preview !== 'boolean')) throw new Error()
+          || typeof voice.name !== 'string' || typeof voice.tagline !== 'string'
+          || (voice.preview_url !== null && (typeof voice.preview_url !== 'string'
+            || !voice.preview_url.startsWith('/api/voice/previews/'))))) throw new Error()
         for (let index = entries.length - 1; index > 0; index -= 1) {
           const swapIndex = Math.floor(Math.random() * (index + 1))
           const entry = entries[index]
@@ -51,61 +90,10 @@ export function VoiceAuditions({ selectedIds, onToggle, suspended = false }: Pro
     }
 
     void loadVoices()
-    return () => {
-      request.abort()
-      previewRequest.current?.abort()
-      audio?.pause()
-    }
+    return () => request.abort()
   }, [])
 
-  async function playPreview(voice: Persona) {
-    const audio = audioRef.current
-    if (!audio) return
-
-    previewRequest.current?.abort()
-    const request = new AbortController()
-    previewRequest.current = request
-    audio.pause()
-    setPlayingId('')
-    setLoadingId(voice.id)
-    setError('')
-
-    try {
-      const response = await fetch(`/api/voice/catalog/${voice.id}/preview`, { signal: request.signal })
-      const preview = await response.json().catch(() => null)
-      if (!response.ok) {
-        if (!request.signal.aborted) {
-          setError(typeof preview?.detail === 'string' ? preview.detail : 'The voice preview server is unavailable.')
-        }
-        return
-      }
-      const url = preview?.url
-      if (typeof url !== 'string') throw new Error()
-      if (request.signal.aborted) return
-      audio.src = url
-      await audio.play()
-      if (!request.signal.aborted) setPlayingId(voice.id)
-    } catch (error) {
-      if (!request.signal.aborted) setError(error instanceof DOMException && error.name === 'NotAllowedError'
-        ? 'Allow sound for this site to hear automatic voice previews.' : `Could not play the sample for ${voice.name}.`)
-    } finally {
-      if (!request.signal.aborted) setLoadingId('')
-    }
-  }
-
   const voice = voices[activeIndex]
-  useEffect(() => {
-    const audio = audioRef.current
-    previewRequest.current?.abort()
-    audio?.pause()
-    audio?.removeAttribute('src')
-    audio?.load()
-    setPlayingId('')
-    setLoadingId('')
-    setError('')
-    if (!suspended && voice?.can_preview) void playPreview(voice)
-    return () => { previewRequest.current?.abort(); audio?.pause() }
-  }, [voice?.id, suspended])
 
   const selected = voice ? selectedIds.includes(voice.id) : false
   // A large hue step keeps neighboring voices visually distinct.
@@ -126,15 +114,8 @@ export function VoiceAuditions({ selectedIds, onToggle, suspended = false }: Pro
       <div className="voice-picker-heading">
         <h3 id="voice-auditions-title" tabIndex={-1}>Pick up to three favorite voices</h3>
         <button type="button" className="voice-mute" aria-label={muted ? 'Unmute voice previews' : 'Mute voice previews'}
-          title={muted ? 'Unmute voice previews' : 'Mute voice previews'} aria-pressed={muted} onClick={() => {
-            const next = !muted
-            setMuted(next)
-            const audio = audioRef.current
-            if (audio) {
-              audio.muted = next
-              if (audio.src) void audio.play().catch(() => setError('Allow sound for this site to hear automatic voice previews.'))
-            }
-          }}><Icon name={muted ? 'muted' : 'sound'} /></button>
+          title={muted ? 'Unmute voice previews' : 'Mute voice previews'} aria-pressed={muted}
+          onClick={() => setMuted(current => !current)}><Icon name={muted ? 'muted' : 'sound'} /></button>
       </div>
       <p role="status" className={catalogStatus ? 'muted mt-2' : 'sr-only'}>{catalogStatus}</p>
       {voice && (
@@ -220,11 +201,9 @@ export function VoiceAuditions({ selectedIds, onToggle, suspended = false }: Pro
               )
             })}
           </div>
-          <p className="voice-preview-status muted">{loadingId === voice.id ? 'Loading preview…' : playingId === voice.id ? 'Previewing · ' : !voice.can_preview ? 'No preview available · ' : ''}
-            {loadingId !== voice.id && (selected ? 'Tap the orb to remove' : 'Tap the orb to save')}</p>
+          <VoiceSample key={voice.id} voice={voice} muted={muted} selected={selected} suspended={suspended} />
         </div>
       )}
-      {error && <p role="alert" className="mt-2 text-sm text-red-700">{error}</p>}
       <section className="saved-voices" aria-labelledby="saved-voices-title">
         <h4 id="saved-voices-title">Saved voices <span className="muted">{selectedIds.length}</span></h4>
         {!selectedIds.length && <p className="muted">Tap a voice orb to add it here.</p>}
@@ -236,7 +215,6 @@ export function VoiceAuditions({ selectedIds, onToggle, suspended = false }: Pro
           </button></li>
         })}</ul>
       </section>
-      <audio ref={audioRef} preload="none" muted={muted} onPause={() => { if (audioRef.current?.paused) setPlayingId('') }} onEnded={() => setPlayingId('')} />
     </section>
   )
 }

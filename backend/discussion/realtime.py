@@ -134,31 +134,41 @@ Write it in the second person ("You speak…"), two or three sentences. The pers
     return profile
 
 
+def voice_casting(persona, cast=voice_profile):
+    # Explicit Realtime preferences take precedence over the generated casting profile.
+    pinned = persona.voice_settings if isinstance(persona.voice_settings, dict) else {}
+    preferred = [pinned["realtime_voice"]] if pinned.get("realtime_voice") in VOICE_GUIDE else []
+    direction = pinned.get("realtime_direction")
+    profile = None if preferred and direction else cast(persona)
+    return [*preferred, *(profile.voices if profile else []), *VOICE_GUIDE], direction or profile.direction
+
+
 def voices(panel, cast=voice_profile):
     """{persona id: (voice, direction)} for the host and every guest: each gets their best-fitting voice that no one
     else on this panel already has."""
     speakers = [panel.host, *sorted({g for roster in panel.guests.values() for g in roster} - {panel.host}, key=str)]
     chosen = {}
     for speaker in speakers:
-        persona = panel.personas[speaker]
-        # A persona can pin its casting in agent_personas.voice_settings: {"realtime_voice": "sage",
-        # "realtime_direction": "You speak…"}. Otherwise the model casts it from the persona text.
-        pinned = persona.voice_settings if isinstance(persona.voice_settings, dict) else {}
-        profile = None if pinned.get("realtime_direction") and pinned.get("realtime_voice") in VOICE_GUIDE \
-            else cast(persona)
-        preferred = [pinned["realtime_voice"]] if pinned.get("realtime_voice") in VOICE_GUIDE else []
+        candidates, direction = voice_casting(panel.personas[speaker], cast)
         taken = {voice for voice, _ in chosen.values()}
-        voice = next((v for v in [*preferred, *(profile.voices if profile else []), *VOICE_GUIDE] if v not in taken),
-                     HOST_VOICE)
-        chosen[speaker] = (voice, pinned.get("realtime_direction") or profile.direction)
+        voice = next((v for v in candidates if v not in taken), HOST_VOICE)
+        chosen[speaker] = (voice, direction)
     return chosen
+
+
+def voice_delivery(persona, direction):
+    pace = f"About {persona.pace_wpm} words a minute." if persona.pace_wpm else ""
+    accent = f"Accent: {persona.accent}." if persona.accent else "Accent: neutral."
+    return f"""{direction or "Speak naturally."}
+{accent} {pace}
+Keep this voice consistent. Save signature sayings for briefs that offer one.
+
+{EXTREME_PERFORMANCE if PERSONA_STYLE == "extreme" else ""}"""
 
 
 def agent_instructions(panel, persona_id, voice_direction=""):
     persona = panel.personas[persona_id]
     host = persona_id == panel.host
-    pace = f"About {persona.pace_wpm} words a minute." if persona.pace_wpm else ""
-    accent = f"Accent: {persona.accent}." if persona.accent else "Accent: neutral." 
     host_name = panel.personas[panel.host].name
     role = (f"""# Your role: HOST
 You are the host and moderator. You open the show, introduce the guests and each story, ask the guests questions,
@@ -177,11 +187,7 @@ say it as that word, never spell it out as T-I-O.
 # Your persona
 {(persona.system_prompt or persona.personality_md or "")[:1500]}
 # Your voice
-{voice_direction or "Speak naturally."}
-{accent} {pace}
-Keep this voice consistent. Save signature sayings for briefs that offer one.
-
-{EXTREME_PERFORMANCE if PERSONA_STYLE == "extreme" else ""}
+{voice_delivery(persona, voice_direction)}
 
 # How you speak
 - You speak only when you receive a TURN BRIEF. Never start on your own.

@@ -27,6 +27,18 @@ Give listener speech priority over queued host turns. Pause playback on interrup
 
 `POST /api/discussion/next-speaker` accepts `ranked_host_ids`, a list of unique `agent_personas.id` values in best-first order. Send `addressed_host_id` for a direct question or `reply_to_host_id` for a host reply. Include an explicitly addressed host in the list after confirming they are eligible. It returns `roster` and `next_host_id`. An empty list yields an empty roster and a null next host. Backend code can also call `discussion.speakers.plan_speaker` directly with the recommender output or fixture IDs.
 
+## Refresh signup and Profile samples
+
+Signup and Profile share the WAV clips in `backend/voice/previews/`. FastAPI gives the browser a URL when a clip exists. The browser can cache clips, and playback works without a voice provider key.
+
+With `DATABASE_URL` and `OPENAI_API_KEY` configured, run this from `backend/` to generate any missing clips. The command uses the live panel's OpenAI Realtime model, voice casting, and delivery settings. Each persona reads the same example line.
+
+```sh
+uv run --locked --with 'websockets>=15,<17' python -m voice.generate_previews
+```
+
+To replace a sample after editing a persona, append `--slug` followed by that persona's slug. Listen to the resulting WAV before shipping it. Samples use a fixed English script and can be shipped with the backend.
+
 ## Test the existing ElevenAgents preview
 
 Create a private ElevenAgents preview agent and grant the backend key ElevenAgents access. On the agent's **Security** tab, allow the **System prompt** override and publish the settings. The app loads the [preview prompt](../backend/editorial/personas/live_host_preview.md) from the repo and sends it when opening each session. [ElevenAgents quickstart](https://elevenlabs.io/docs/eleven-agents/quickstart/) · [Prompt overrides](https://elevenlabs.io/docs/eleven-agents/customization/personalization/overrides)

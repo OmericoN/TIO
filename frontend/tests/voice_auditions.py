@@ -1,12 +1,15 @@
-"""Run with Vite on localhost:5173, Python Playwright and Edge. APIs are mocked."""
+"""Run with Vite on localhost:5173, FastAPI, Python Playwright and Chrome."""
+from pathlib import Path
+from tempfile import gettempdir
+
 from playwright.sync_api import sync_playwright, expect
 
 ADA = '11111111-1111-4111-8111-111111111111'
 GRACE = '22222222-2222-4222-8222-222222222222'
 VOICES = [
-    {'id': ADA, 'name': 'Ada', 'tagline': 'Technology and markets', 'can_preview': True},
-    {'id': GRACE, 'name': 'Grace', 'tagline': 'A clear economic perspective', 'can_preview': True},
-    {'id': '33333333-3333-4333-8333-333333333333', 'name': 'Sam', 'tagline': 'World news', 'can_preview': False},
+    {'id': ADA, 'name': 'Ada', 'tagline': 'Technology and markets', 'preview_url': '/api/voice/previews/kingston-public-radio.wav'},
+    {'id': GRACE, 'name': 'Grace', 'tagline': 'A clear economic perspective', 'preview_url': '/api/voice/previews/after-dark-desk.wav'},
+    {'id': '33333333-3333-4333-8333-333333333333', 'name': 'Sam', 'tagline': 'World news', 'preview_url': None},
 ]
 
 
@@ -26,24 +29,20 @@ def open_voices(page):
 
 
 with sync_playwright() as p:
-    browser = p.chromium.launch(channel='msedge')
+    browser = p.chromium.launch(channel='chrome')
     for width, theme in [(320, 'light'), (524, 'dark'), (1440, 'light')]:
         page = browser.new_page(viewport={'width': width, 'height': 900}, reduced_motion='reduce', has_touch=width == 320)
-        errors, previews, signups = [], [], []
+        errors, requests, signups = [], [], []
         page.on('pageerror', lambda e: errors.append(str(e)))
+        page.on('request', lambda request: requests.append(request.url))
         page.add_init_script(f"localStorage.setItem('tio-theme','{theme}')")
         page.add_init_script('Math.random = () => .999')
         page.route('**/api/voice/catalog', lambda r: r.fulfill(json=VOICES))
-
-        def preview(route):
-            previews.append(route.request.url)
-            route.fulfill(json={'url': '/voices/rates-open.wav'})
 
         def signup(route):
             signups.append(route.request.post_data_json)
             route.fulfill(json={'user': {'id': 'test'}})
 
-        page.route('**/api/voice/catalog/*/preview', preview)
         page.route('**/auth/v1/signup', signup)
         open_voices(page)
         expect(page.get_by_role('group', name='Voice preview', exact=True)).to_have_css('border-top-width', '0px')
@@ -55,9 +54,11 @@ with sync_playwright() as p:
         page.get_by_role('button', name='Next voice', exact=True).click()
         expect(page.locator('.voice-carousel-info h4')).not_to_have_text(first)
         expect(page.locator('.voice-preview-status')).to_contain_text('Previewing')
+        previous_audio = page.locator('.voice-auditions audio').element_handle()
         page.get_by_role('button', name='Previous voice', exact=True).click()
         expect(page.locator('.voice-carousel-info h4')).to_have_text(first)
         expect(page.locator('.voice-preview-status')).to_contain_text('Previewing')
+        assert previous_audio.evaluate('e => e.paused')
         orb = page.locator('.voice-save-orb')
         orb.scroll_into_view_if_needed()
         box = orb.bounding_box()
@@ -91,16 +92,16 @@ with sync_playwright() as p:
         dots.get_by_role('button', name='Sam', exact=True).click()
         expect(page.locator('.voice-preview-status')).to_contain_text('No preview available')
         assert page.locator('.voice-auditions audio').evaluate('e => e.paused')
+        expect(page.get_by_role('button', name='Play sample')).to_have_count(0)
         dots.get_by_role('button', name='Ada', exact=True).click()
         expect(page.locator('.voice-save-orb')).to_have_attribute('aria-pressed', 'true')
-        expect(page.locator('.voice-carousel-actions')).to_have_count(0)
+        expect(page.get_by_role('button', name='Play sample')).to_be_visible()
         page.get_by_role('button', name='Back', exact=True).click()
         page.get_by_role('button', name='Continue', exact=True).click()
         dots.get_by_role('button', name='Ada', exact=True).click()
         expect(page.locator('.voice-save-orb')).to_have_attribute('aria-pressed', 'true')
         assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')
-        if width == 524:
-            page.screenshot(path='frontend/node_modules/signup-voices.png', full_page=True)
+        page.screenshot(path=Path(gettempdir()) / f'tio-signup-voices-{width}.png', full_page=True)
         page.get_by_role('button', name='Continue', exact=True).click()
         expect(page.get_by_text('Step 4 of 4')).to_be_visible()
         expect(page.locator('#login-title .brand')).to_have_css('font-size', '43px')
@@ -113,9 +114,33 @@ with sync_playwright() as p:
         assert signups[0]['data']['tio_onboarding']['preferred_persona_ids'] == [ADA, GRACE]
         assert signups[0]['data']['tio_onboarding']['listener_goal'] == 'Technology'
         assert 'preferred_listen_time' not in signups[0]['data']['tio_onboarding']
-        assert any(ADA in url for url in previews) and any(GRACE in url for url in previews) and not errors, (previews, errors)
+        assert all(any(url.endswith(voice['preview_url']) for url in requests) for voice in VOICES[:2])
+        assert not any('/api/voice/catalog/' in url for url in requests) and not errors, errors
         print(f'{width}px {theme}: streamlined picker, playback, favorites, back navigation and signup metadata passed', flush=True)
         page.close()
+
+    page = browser.new_page(reduced_motion='reduce')
+    page.add_init_script("""
+        Math.random = () => .999;
+        const play = HTMLMediaElement.prototype.play;
+        let clicked = false;
+        document.addEventListener('click', event => {
+            if (event.target.closest('.voice-preview-play')) clicked = true;
+        }, true);
+        HTMLMediaElement.prototype.play = function () {
+            if (!clicked) return Promise.reject(new DOMException('Autoplay blocked', 'NotAllowedError'));
+            return play.call(this);
+        };
+    """)
+    page.route('**/api/voice/catalog', lambda route: route.fulfill(json=VOICES))
+    open_voices(page)
+    audio = page.locator('.voice-auditions audio')
+    assert audio.evaluate('e => e.paused')
+    page.get_by_role('button', name='Play sample').click()
+    expect(page.locator('.voice-preview-status')).to_contain_text('Previewing')
+    page.wait_for_function("document.querySelector('.voice-auditions audio').currentTime > 0")
+    print('Blocked autoplay: Play sample starts the WAV', flush=True)
+    page.close()
 
     page = browser.new_page(reduced_motion='reduce')
     page.route('**/api/voice/catalog', lambda r: r.fulfill(status=503, json={'detail': 'Unavailable'}))
@@ -128,7 +153,6 @@ with sync_playwright() as p:
 
     page = browser.new_page(viewport={'width': 537, 'height': 770}, reduced_motion='reduce')
     page.route('**/api/voice/catalog', lambda route: route.fulfill(json=VOICES))
-    page.route('**/api/voice/catalog/*/preview', lambda route: route.fulfill(json={'url': '/voices/rates-open.wav'}))
     page.route('**/api/profile/embed', lambda route: route.fulfill(status=204))
     page.route('**/api/recommend', lambda route: route.fulfill(json={'article_ids': ['story']}))
     page.route('**/api/recommend/lookup', lambda route: route.fulfill(json={
@@ -166,6 +190,10 @@ with sync_playwright() as p:
     expect(page.get_by_label('Other interests (optional)')).to_have_value('Urban planning')
     saved = page.locator('.saved-voices')
     expect(saved.get_by_text('Ada', exact=True)).to_be_visible()
+    page.get_by_role('group', name='Nearby voices').get_by_role('button', name='Ada', exact=True).click()
+    page.get_by_role('button', name='Play sample').click()
+    expect(page.locator('.voice-preview-status')).to_contain_text('Previewing')
+    page.wait_for_function("document.querySelector('.voice-auditions audio').currentTime > 0")
     page.get_by_label('Technology', exact=True).uncheck()
     page.get_by_label('Company earnings', exact=True).check()
     page.get_by_label('Other interests (optional)').fill('City budgets')
