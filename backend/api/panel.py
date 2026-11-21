@@ -100,6 +100,7 @@ class Session:
     holding: asyncio.Task | None = None  # the host's pre-voiced holding lines for listener questions
     brief_pending: tuple | None = None   # realtime panel: (brief id, TurnBrief, speaker name, cards) being spoken
     brief_prefetch: Prefetch | None = None
+    jump: tuple | None = None  # realtime panel: (story index, brief planned for its opening) after a skip request
 
 
 sessions: dict[UUID, Session] = {}
@@ -589,6 +590,39 @@ def start_brief_prefetch(item):
     item.brief_prefetch.task.add_done_callback(lambda task: task.cancelled() or task.exception())
 
 
+class ListenerRequest(BaseModel):
+    generation: int = Field(ge=0)
+    text: str = Field(min_length=1, max_length=2000)
+
+
+TEASER = "(The host just teased this story in a few words.)"
+
+
+@router.post("/{key}/realtime/listen")
+async def realtime_listen(key: UUID, body: ListenerRequest):
+    """The listener spoke. If they want another story, switch to it now and start planning its opening while the host
+    bridges with a short teaser, so the panel is ready when the host stops talking."""
+    item = session(key)
+    if body.generation != item.generation:
+        raise HTTPException(409, "Turn superseded.")
+    target = item.panel.requested_story(body.text)
+    if target is None:
+        item.jump = None
+        return {"intent": "question"}
+    panel = item.panel.fork()
+    panel.jump_to(target)
+    panel.history.append(DiscussionLine(speaker=panel.personas[panel.host].name, text=TEASER))
+    task = asyncio.create_task(run_in_threadpool(plan_turn, panel))
+    task.add_done_callback(lambda done: done.cancelled() or done.exception())
+    item.jump = target, Prefetch(None, item.generation, panel.state(), task)
+    story = panel.story
+    facts = "; ".join(c["point"] for c in realtime.story_cards(panel)[:3])
+    return {"intent": "skip", "headline": story.headline,
+            "note": (f"The listener wants to move on. Say yes in a few words, then give a two-sentence teaser of the "
+                     f"next story, \"{story.headline}\", and why it might matter to them ({facts}). Don't go into "
+                     f"detail and don't ask the guests anything: the panel picks it up from there.")}
+
+
 @router.post("/{key}/realtime/next")
 async def realtime_next(key: UUID, step: RealtimeStep):
     """Record what the last agent said (and any live exchange with the listener), then hand out the next brief,
@@ -610,6 +644,12 @@ async def realtime_next(key: UUID, step: RealtimeStep):
     if step.listener:
         item.panel.live_exchange([(line.role, line.text) for line in step.listener])
         prefetch = None
+    if item.jump:  # the listener asked for another story: its opening was planned while the host bridged
+        target, planned = item.jump
+        item.jump = None
+        item.panel.jump_to(target)
+        item.panel.history.append(DiscussionLine(speaker=item.panel.personas[item.panel.host].name, text=TEASER))
+        prefetch = Prefetch(step.heard, planned.generation, planned.state, planned.task)
     if item.panel.index == len(item.panel.stories):
         return {"done": True, "context": context}
     item.busy = True

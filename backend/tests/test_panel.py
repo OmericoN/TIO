@@ -519,3 +519,37 @@ class RealtimeRoleTest(unittest.TestCase):
         brief = realtime.TurnBrief(goal="Answer", points=["Growth"], card_ids=[], handoff=None, action="respond",
                                    max_seconds=12)
         self.assertIn("You are a GUEST, not the host", realtime.render_brief(panel, brief))
+
+
+class SkipRequestTest(unittest.IsolatedAsyncioTestCase):
+    def test_skip_requests_pick_the_next_or_the_named_story(self):
+        panel = fixture()
+        later = panel.stories[1].headline
+        self.assertIsNone(panel.requested_story("Why did revenue grow?"))
+        self.assertIsNone(panel.requested_story("What did the analysts talk about?"))  # weak cue, no story named
+        self.assertEqual(panel.requested_story("Can we fast forward to something else?"), 1)
+        self.assertEqual(panel.requested_story(f"Let's talk about {later.lower()}"), 1)
+
+    async def test_skip_plans_the_new_story_while_the_host_bridges(self):
+        from discussion import realtime
+        key = uuid4()
+        item = api.Session(fixture())
+        item.touched = time.monotonic()
+        api.sessions[key] = item
+        self.addCleanup(api.sessions.pop, key, None)
+        briefs = iter(realtime.TurnBrief(goal=f"Goal {i}", points=["p"], card_ids=[], handoff=None, action="respond",
+                                         max_seconds=12) for i in range(10))
+        with patch.object(realtime, "make_brief", side_effect=lambda panel: next(briefs)) as plan:
+            first = await api.realtime_next(key, api.RealtimeStep(generation=0))
+            await item.brief_prefetch.task
+            skip = await api.realtime_listen(key, api.ListenerRequest(generation=0, text="Skip this one please"))
+            self.assertEqual((skip["intent"], skip["headline"]), ("skip", item.panel.stories[1].headline))
+            await item.jump[1].task                                     # planned during the host's teaser
+            calls = plan.call_count
+            resumed = await api.realtime_next(key, api.RealtimeStep(
+                generation=0, heard=first["id"], text="Revenue grew.", interrupted=True,
+                listener=[api.LiveLine(role="listener", text="Skip this one please"),
+                          api.LiveLine(role="host", text="Sure, next up: the Fed.")]))
+            self.assertEqual(resumed["story"], item.panel.stories[1].headline)
+            self.assertEqual(plan.call_count, calls)                     # no wait: the opening was ready
+            await item.brief_prefetch.task

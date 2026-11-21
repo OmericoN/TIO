@@ -200,6 +200,11 @@ def figures_supported(spoken, quotes):
     return all(any(rounds_to(q, v) for q in quoted) for v in values(spoken))
 
 
+# Strong cues move to the next story; weak ones only jump when they name another story in the briefing.
+SKIP_REQUEST = re.compile(
+    r"\b(skip|next (story|topic|one)|move on|moving on|fast[- ]?forward|different (topic|story|subject)|"
+    r"something else|change (the )?(topic|subject|story))\b", re.IGNORECASE)
+JUMP_REQUEST = re.compile(r"\b(switch to|go to|jump to|talk about|get to|what about|let'?s hear about)\b", re.IGNORECASE)
 TONE_SEVERITY = ["somber", "serious", "cautious", "analytical", "neutral", "upbeat"]
 ANGLES = [
     "the opportunity: who gains, what is working and why it could matter",
@@ -377,6 +382,27 @@ class Panel:
             offered.add("outro_template")
             notes.append("This closes the briefing: sign off in the spirit of outro_template, in your own words.")
         return frozenset(offered), "\n".join(notes)
+
+    def requested_story(self, text):
+        """The story a listener asks to jump to ("skip this", "can we talk about the Fed?"), or None when they're not
+        asking to change story. Without code-free cues like these the panel would stay on the current story."""
+        strong, weak = SKIP_REQUEST.search(text), JUMP_REQUEST.search(text)
+        if not strong and not weak:
+            return None
+        words = content_words(text)
+        others = [i for i in range(len(self.stories)) if i != self.index]
+        named = max(others, key=lambda i: len(words & content_words(self.stories[i].headline)), default=None)
+        if named is not None and len(words & content_words(self.stories[named].headline)) >= 2:
+            return named
+        return self.index + 1 if strong and self.index + 1 < len(self.stories) else None
+
+    def jump_to(self, index):
+        """Leave the current story and start `index` fresh, as if the host had just closed the previous one."""
+        self.index, self.phase, self.count, self.seconds = index, "open", 0, 0
+        self.next_guest, self.probed, self.question, self.reference = None, False, "", ""
+        self.guest_turns.clear()
+        self.history.clear()
+        self.last_sources = []
 
     def live_exchange(self, lines):
         """Fold a live voice conversation with the listener into the panel: the lines join the story's history and

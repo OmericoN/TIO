@@ -111,7 +111,8 @@ export function PanelPlayer({ owner, stories, preferences, plan, recorded, origi
   const realtimeMode = !recorded  // whatever the saved format: a host plus guests, each a separate live voice
   const rt = useRef<{ agents: Map<string, RealtimeAgent>; host?: RealtimeAgent; microphone: MediaStream | null;
     current?: RealtimeAgent; listening: boolean; exchange: { role: 'listener' | 'host'; text: string }[];
-    quiet?: number; duckTimer?: number; release?: () => void; talking?: boolean } | null>(null)
+    quiet?: number; duckTimer?: number; release?: () => void; talking?: boolean; generation: number;
+    skipping?: boolean } | null>(null)
 
   function resumePanel(state: NonNullable<typeof rt.current>) {
     clearTimeout(state.quiet)
@@ -151,7 +152,18 @@ export function PanelPlayer({ owner, stories, preferences, plan, recorded, origi
     state.exchange.push({ role: 'listener', text })
     save({ id: crypto.randomUUID(), speaker: 'Listener', text })
     setStatus('Answering your question…')
-    state.host.answer(text)
+    const host = state.host
+    // If they want another story, the backend switches now and plans its opening while the host bridges with a
+    // short teaser, so the panel is ready the moment the host stops talking.
+    void post<{ intent: string; headline?: string; note?: string }>(`/${session.current}/realtime/listen`,
+      { generation: state.generation, text })
+      .catch(() => ({ intent: 'question' as string, note: undefined, headline: undefined }))
+      .then(result => {
+        if (rt.current !== state) return
+        state.skipping = result.intent === 'skip'
+        if (state.skipping) setStatus(`Moving on to: ${result.headline}`)
+        host.answer(text, result.note)
+      })
     state.quiet = window.setTimeout(() => { state.listening = false; state.release?.(); state.release = undefined }, 15000)
   }
   const showSession = useRef<{ conversation?: Conversation; cue?: number; heardListener: number; ending: boolean;
@@ -394,7 +406,8 @@ export function PanelPlayer({ owner, stories, preferences, plan, recorded, origi
     try { microphone = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } }) }
     catch { setStatus('Microphone unavailable. You can type questions.') }
     if (session.current !== id || generation.current !== gen) { microphone?.getTracks().forEach(t => t.stop()); return }
-    const state: NonNullable<typeof rt.current> = { agents: new Map(), microphone, listening: false, exchange: [] }
+    const state: NonNullable<typeof rt.current> = { agents: new Map(), microphone, listening: false, exchange: [],
+      generation: gen - sessionStart.current }
     rt.current = state
     const story = { title: stories[0]?.title ?? '' }
     const quietThenResume = (ms: number) => {
@@ -419,7 +432,8 @@ export function PanelPlayer({ owner, stories, preferences, plan, recorded, origi
           setActive(line)
           save(line)
         },
-        onReplyDone: () => { if (rt.current === state) quietThenResume(3500) },  // a pause, then back to the panel
+        // A pause, then back to the panel; straight on after a skip, since the next story is already planned.
+        onReplyDone: () => { if (rt.current === state) { quietThenResume(state.skipping ? 600 : 3500); state.skipping = false } },
       })))
     if (rt.current !== state) { connected.forEach(agent => agent.close()); return }
     connected.forEach(agent => state.agents.set(agent.info.id, agent))

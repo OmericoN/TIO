@@ -126,8 +126,8 @@ export class RealtimeAgent {
   }
 
   /** The host answers the listener out loud (spoken questions arrive transcribed; typed ones as they are). */
-  answer(question: string) {
-    this.note(`LISTENER QUESTION: "${question}". Answer them now, following your instructions and your latest CONTEXT UPDATE.`)
+  answer(question: string, direction?: string) {
+    this.note(`LISTENER QUESTION: "${question}". ${direction ?? 'Answer them now, following your instructions and your latest CONTEXT UPDATE.'}`)
     this.send({ type: 'response.create' })
   }
 
