@@ -68,7 +68,7 @@ export function NewsWorkspace({ owner, onboarding, listenerId: userId, email, ac
   const [question, setQuestion] = useState('')
   const [search, setSearch] = useState<{ query: string; status: 'loading' | 'done' | 'error'; message?: string } | null>(null)
   const [launch, setLaunch] = useState<{ x: number; y: number; context: AudioContext | null; lineup: Headline[]
-    listener?: { id: string; articleIds: string[]; selectedIds: string[] } } | null>(null)
+    listener?: { id: string; articleIds: string[]; selectedIds: string[]; favoriteIds: string[] } } | null>(null)
   const feed = useRef<Headline[]>([])
   const searchRequest = useRef<AbortController | null>(null)
   const trigger = useRef<HTMLButtonElement>(null)
@@ -252,7 +252,8 @@ export function NewsWorkspace({ owner, onboarding, listenerId: userId, email, ac
     const lineup = selected.length ? selected : stories.slice(0, Math.min(6, Math.max(1, Math.floor(preferences.minutes / 2))))
     setLaunch({ x: rect.x + rect.width / 2, y: rect.y + rect.height / 2, context,
       lineup: userId ? selected : lineup,
-      listener: userId ? { id: userId, articleIds: stories.map(story => story.id), selectedIds } : undefined })
+      listener: userId ? { id: userId, articleIds: stories.map(story => story.id), selectedIds,
+        favoriteIds: choices.voiceIds } : undefined })
   }
 
   function storeChoices(next: ListenerChoices) {

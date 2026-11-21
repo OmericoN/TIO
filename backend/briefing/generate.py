@@ -6,8 +6,11 @@
 2. Fit to the length (timing.py): the listener's selected stories first, then the ranked order. Too much: drop the
    rest. Too little: ask the recommender for its next articles (excluding everything already listed) and fit again,
    until the length is filled or nothing new comes back; then the plan is shorter and says so.
-3. Personas: the recommender's ordering for this listener (mostly their past preferences).
-4. Tones and hosts, without an LLM: each article's tone is preset in articles.desired_tone. Choose guest experts whose humor suits the most sensitive tone in the plan (MAX_HUMOR).
+3. Personas: the listener's favourite voices first, in their order, then the recommender's ordering (mostly their past
+   preferences).
+4. Tones and hosts, without an LLM: each article's tone is preset in articles.desired_tone. The guest experts are the
+   listener's favourites first; only seats they can't fill are drawn from the ranking. Anyone whose humor doesn't
+   suit the plan's most sensitive tone (MAX_HUMOR) is skipped, favourites included.
 """
 
 import logging
@@ -107,17 +110,18 @@ def load_tones(conn, ids: list[str]) -> dict[str, str]:
 
 
 def pick_hosts(conn, ranked: list[str], tones: dict[str, str], n: int, top_k: int = HOST_POOL,
-               rng: random.Random | None = None) -> list[str]:
-    """n personas whose humor suits every tone in the plan, drawn at random from the listener's top_k suitable ones.
-    Better-ranked personas are likelier (weight 1/rank), so favourites still come up most, but the panel varies
-    from one briefing to the next. Returned in ranking order."""
+               rng: random.Random | None = None, favourites: list[str] = ()) -> list[str]:
+    """n personas whose humor suits every tone in the plan. The listener's favourites take the seats first, in their
+    order; any seat left is drawn at random from the next top_k suitable personas, better-ranked ones likelier
+    (weight 1/rank), so only that part of the panel varies between briefings. Returned in ranking order."""
     limit = min((MAX_HUMOR.get(t, 5) for t in tones.values()), default=5)
     humor = dict(conn.execute("select id::text, humor_level from public.agent_personas where id = any(%s::uuid[])",
                               (ranked,)).fetchall()) if ranked else {}
-    pool = [i for i in ranked if (humor.get(i) or 1) <= limit][:max(top_k, n)]
+    suitable = [i for i in ranked if (humor.get(i) or 1) <= limit]
+    chosen = [i for i in dict.fromkeys(favourites) if i in suitable][:n]
+    pool = [i for i in suitable if i not in chosen][:max(top_k, n - len(chosen))]
     rng = rng or random.Random()
     weights = {i: 1 / (rank + 1) for rank, i in enumerate(pool)}
-    chosen = []
     while pool and len(chosen) < n:
         pick = rng.choices(pool, [weights[i] for i in pool])[0]
         chosen.append(pick)
@@ -126,15 +130,17 @@ def pick_hosts(conn, ranked: list[str], tones: dict[str, str], n: int, top_k: in
 
 
 def generate(conn, user_id: str, article_ids: list[str], selected_article_ids: list[str], minutes: float,
-             *, focus: str | None = None,
-             days: int | None = None, excluded_article_ids: list[str] = (), expert_count: int = 2) -> dict:
+             *, focus: str | None = None, days: int | None = None, excluded_article_ids: list[str] = (),
+             expert_count: int = 2, favourite_persona_ids: list[str] | None = None) -> dict:
+    """`favourite_persona_ids`: the listener's saved voices in their order (Profile); None uses their sign-up picks."""
     listener = load_listener(conn, user_id)
     selected = set(selected_article_ids)
     excluded = set(excluded_article_ids) - selected
     ids = list(dict.fromkeys([*selected_article_ids, *(i for i in article_ids if i not in excluded)]))
 
+    favourites = list(listener.chosen_persona_ids if favourite_persona_ids is None else favourite_persona_ids)
     persona_ids = rank_hosts(conn, listener.vector, host_affinity(conn, listener.user_id),
-                             listener.default_persona_id, listener.chosen_persona_ids)
+                             listener.default_persona_id, favourites)
     moderator = conn.execute("select id::text from public.agent_personas where slug = 'main-host'").fetchone()
     moderator_id = moderator[0] if moderator else None
     candidates = [i for i in persona_ids if i != moderator_id]
@@ -162,7 +168,7 @@ def generate(conn, user_id: str, article_ids: list[str], selected_article_ids: l
 
     final_ids = [i for s in kept for i in s.article_ids]
     tones = load_tones(conn, final_ids)
-    hosts = pick_hosts(conn, candidates, tones, expert_count)
+    hosts = pick_hosts(conn, candidates, tones, expert_count, favourites=favourites)
 
     wpm = _pace(conn, hosts or ([moderator_id] if moderator_id else []))
     in_list = set(ids)

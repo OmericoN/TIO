@@ -154,7 +154,7 @@ class MatchedPanelTest(unittest.IsolatedAsyncioTestCase):
               patch("briefing.generate.host_affinity", return_value={}),
               patch("briefing.generate.load_articles", return_value=article_rows),
               patch("briefing.generate.load_tones", side_effect=lambda _, ids: dict.fromkeys(ids, "neutral")),
-              patch("briefing.generate.pick_hosts", side_effect=lambda _, ranked, tones, n: ranked[:n])):
+              patch("briefing.generate.pick_hosts", side_effect=lambda _, ranked, tones, n, **__: ranked[:n])):
             plan = generate(conn, "fixture", article_ids, selected, 1)
         self.assertGreater(plan["estimated_minutes"], 1)
         self.assertEqual(plan["hosts"], guests)

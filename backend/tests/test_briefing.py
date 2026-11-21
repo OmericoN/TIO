@@ -89,7 +89,7 @@ class GenerateTest(unittest.TestCase):
         load.assert_called_once_with(conn, ["keep"])
         refill.assert_called_once_with(conn, listener, None, excluded_article_ids=["dismissed", "keep"],
                                        days=2, limit=30)
-        pick.assert_called_once_with(conn, ["joker", "calm"], {"keep": "serious"}, 2)  # Tio moderates a debate
+        pick.assert_called_once_with(conn, ["joker", "calm"], {"keep": "serious"}, 2, favourites=[])  # Tio moderates
         self.assertEqual((plan["article_ids"], plan["tones"], plan["hosts"], plan["untoned_article_ids"]),
                          (["keep"], {"keep": "serious"}, ["calm"], []))
 
@@ -108,6 +108,37 @@ class HostTest(unittest.TestCase):
         self.assertEqual(pick_hosts(conn, ranked, {"a": "upbeat", "b": "serious"}, 2, **top), ["wry", "calm"])
         self.assertEqual(pick_hosts(conn, ranked, {"a": "serious", "b": "somber"}, 2, **top), ["calm", "dry"])
         self.assertEqual(pick_hosts(conn, ranked, {}, 1, top_k=1), ["joker"])
+
+    def test_favourite_voices_take_the_seats_first(self) -> None:
+        ranked = ["fav-2", "fav-1", "joker-fav", "p1", "p2", "p3"]
+        conn = self.conn({"fav-2": 1, "fav-1": 2, "joker-fav": 5, "p1": 1, "p2": 1, "p3": 1})
+        for seed in range(20):  # no randomness while favourites can fill the panel
+            rng = random.Random(seed)
+            self.assertEqual(pick_hosts(conn, ranked, {}, 2, rng=rng, favourites=["fav-2", "fav-1"]), ["fav-2", "fav-1"])
+        # a favourite too jokey for a somber story sits it out; the empty seat comes from the ranking
+        panel = pick_hosts(conn, ranked, {"a": "somber"}, 2, favourites=["joker-fav", "fav-2"])
+        self.assertEqual(panel[0], "fav-2")
+        self.assertIn(panel[1], {"fav-1", "p1", "p2", "p3"})
+        # more favourites than seats: the first ones in the listener's order
+        self.assertEqual(pick_hosts(conn, ranked, {}, 1, favourites=["fav-1", "fav-2"]), ["fav-1"])
+
+    def test_profile_favourites_override_the_sign_up_picks(self) -> None:
+        conn = Mock()
+        conn.execute.return_value.fetchone.return_value = ("moderator",)
+        conn.execute.return_value.fetchall.return_value = [(144,)]
+        listener = Listener([1, 0], ["en"], preferences="Explain rates", chosen_persona_ids=["signup-pick"])
+        with (patch("briefing.generate.load_listener", return_value=listener),
+              patch("briefing.generate.rank_hosts", return_value=["new-fav", "signup-pick"]) as rank,
+              patch("briefing.generate.host_affinity", return_value={}),
+              patch("briefing.generate.load_articles", return_value=dict([art("keep")])),
+              patch("briefing.generate.load_tones", return_value={}),
+              patch("briefing.generate.pick_hosts", return_value=["new-fav"]) as pick,
+              patch("briefing.generate.recommend", return_value={"article_ids": []})):
+            generate(conn, "u1", ["keep"], [], 5, favourite_persona_ids=["new-fav"])
+            self.assertEqual(rank.call_args.args[4], ["new-fav"])
+            self.assertEqual(pick.call_args.kwargs["favourites"], ["new-fav"])
+            generate(conn, "u1", ["keep"], [], 5)
+            self.assertEqual(pick.call_args.kwargs["favourites"], ["signup-pick"])
 
     def test_hosts_vary_across_briefings_but_favour_the_top(self) -> None:
         ranked = [f"p{i}" for i in range(10)]

@@ -79,7 +79,7 @@ type Props = {
   recorded: boolean
   origin: { x: number; y: number; context: AudioContext | null }
   // A signed-in listener: the briefing is planned from their recommended feed and picks once they confirm.
-  listener?: { id: string; articleIds: string[]; selectedIds: string[] }
+  listener?: { id: string; articleIds: string[]; selectedIds: string[]; favoriteIds?: string[] }
   // ISO 639-1 code of the language every voice speaks to this listener.
   language: string
   onClose: () => void
@@ -712,14 +712,17 @@ export function PanelPlayer({ owner, stories: chosenStories, preferences, langua
     const plan = await postJson<DiscussionPlan & { segments: { article_ids: string[] }[] }>('/api/briefing/generate', {
       user_id: who.id, article_ids: who.articleIds, selected_article_ids: who.selectedIds, minutes,
       mode: 'debate', expert_count: experts,
+      // The saved voices take the guest seats first, in their order (an empty list means no favourites).
+      ...(who.favoriteIds ? { favorite_persona_ids: who.favoriteIds } : {}),
     })
     const ids = plan.segments.map(segment => segment.article_ids[0])
     if (!ids.length) throw new Error('No stories are available for this briefing.')
     if (plan.hosts.length < experts) throw new Error('Too few matching experts for this panel. Try a smaller panel or different stories.')
-    const found = await postJson<Record<string, { headline: string; publication: string }>>('/api/recommend/lookup', { article_ids: ids })
-      .catch(() => ({} as Record<string, { headline: string; publication: string }>))
+    type Found = Record<string, { headline: string; publication: string; thumb_url?: string | null }>
+    const found = await postJson<Found>('/api/recommend/lookup', { article_ids: ids }).catch(() => ({} as Found))
     const plannedStories = ids.map(id => ({ id, title: found[id]?.headline ?? chosenStories.find(s => s.id === id)?.title ?? 'Story',
-      topic: found[id]?.publication ?? '', summary: '' }))
+      topic: found[id]?.publication ?? '', summary: '',
+      thumb_url: found[id]?.thumb_url ?? chosenStories.find(s => s.id === id)?.thumb_url }))
     return { plannedStories, plan: { segments: plan.segments, hosts: plan.hosts, tones: plan.tones } }
   }
 

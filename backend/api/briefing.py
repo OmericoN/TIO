@@ -29,14 +29,17 @@ class GenerateRequest(BaseModel):
                               description="The focus the list was made with, so added articles respect it.")
     days: int | None = Field(default=None, ge=1, le=365)
     excluded_article_ids: list[str] = Field(default_factory=list, max_length=500)
+    favorite_persona_ids: list[UUID] | None = Field(
+        default=None, max_length=25, description="The listener's saved voices, in their order (Profile). Guest "
+        "experts come from these first. Omitted: the voices picked at sign-up.")
 
 
 class GeneratePlan(BaseModel):
     article_ids: list[str] = Field(description="Final articles, story by story.")
     profile: str
     persona_ids: list[str] = Field(description="Every persona, ordered by the listener's preferences.")
-    hosts: list[str] = Field(description="Up to four guest experts: the listener's order, minus personas "
-                                         "too jokey for the plan's most sensitive tone.")
+    hosts: list[str] = Field(description="Up to four guest experts: the listener's favourites first, then their "
+                                         "ranking, minus personas too jokey for the plan's most sensitive tone.")
     tones: dict[str, str] = Field(description="Preset tone per article (articles.tone).")
     segments: list[PlannedStory]
     estimated_minutes: float
@@ -56,7 +59,9 @@ def generate_briefing(body: GenerateRequest, request: Request) -> GeneratePlan:
             return GeneratePlan(**generate(conn, str(body.user_id), body.article_ids, body.selected_article_ids,
                                            body.minutes, focus=body.focus, days=body.days,
                                            expert_count=body.expert_count,
-                                           excluded_article_ids=body.excluded_article_ids))
+                                           excluded_article_ids=body.excluded_article_ids,
+                                           favourite_persona_ids=None if body.favorite_persona_ids is None
+                                           else [str(i) for i in body.favorite_persona_ids]))
     except ProfileNotFound:
         raise HTTPException(status_code=404, detail="No profile with that user_id.") from None
     except (NoProfileSignal, UnknownSelectedArticles) as err:

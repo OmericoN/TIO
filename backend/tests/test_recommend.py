@@ -233,13 +233,14 @@ class HostsTest(unittest.TestCase):
         self.assertEqual(score_hosts(rows, {"liked": 0.6, "disliked": -0.6}, "default"),
                          ["liked", "default", "perfect-fit", "disliked"])
 
-    def test_new_listener_gets_their_three_sign_up_picks_first(self) -> None:
+    def test_favourites_come_first_in_the_listeners_order(self) -> None:
         rows = [("best-fit", 0.9), ("pick-1", 0.2), ("pick-2", 0.1), ("pick-3", 0.3), ("other", 0.5)]
-        self.assertEqual(score_hosts(rows, {}, None, ["pick-1", "pick-2", "pick-3"])[:3], ["pick-3", "pick-1", "pick-2"])
+        self.assertEqual(score_hosts(rows, {}, None, ["pick-2", "pick-1", "gone", "pick-2"]),
+                         ["pick-2", "pick-1", "best-fit", "other", "pick-3"])  # unknown ids and repeats dropped
 
-    def test_history_takes_over_from_the_sign_up_picks(self) -> None:
-        rows = [("pick", 0.2), ("loved", 0.2)]
-        self.assertEqual(score_hosts(rows, {"loved": 0.5}, None, ["pick"]), ["loved", "pick"])
+    def test_favourites_stay_first_whatever_the_history(self) -> None:
+        rows = [("pick", 0.2), ("loved", 0.2), ("disliked", 0.9)]
+        self.assertEqual(score_hosts(rows, {"loved": 0.5, "pick": -1.0}, None, ["pick"]), ["pick", "loved", "disliked"])
 
 
 class EndpointTest(unittest.TestCase):
