@@ -130,7 +130,6 @@ with sync_playwright() as p:
     page.route('**/api/voice/catalog', lambda route: route.fulfill(json=VOICES))
     page.route('**/api/voice/catalog/*/preview', lambda route: route.fulfill(json={'url': '/voices/rates-open.wav'}))
     page.route('**/api/profile/embed', lambda route: route.fulfill(status=204))
-    page.route('**/api/recommend/catalog', lambda route: route.fulfill(json={'users': []}))
     page.route('**/api/recommend', lambda route: route.fulfill(json={'article_ids': ['story']}))
     page.route('**/api/recommend/lookup', lambda route: route.fulfill(json={
         'story': {'headline': 'A briefing topic', 'publication': 'Sample Markets', 'language': 'en'},

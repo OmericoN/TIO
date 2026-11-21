@@ -19,6 +19,17 @@ from tests.test_briefing import art
 from tests.test_panel import fixture
 
 
+class PlannedPanelValidationTest(unittest.TestCase):
+    def test_planned_panel_accepts_three_or_four_experts(self):
+        hosts = [uuid4() for _ in range(5)]
+        plan = {"segments": [{"article_ids": ["article"], "estimated_seconds": 60}], "tones": {}}
+        for count in (3, 4):
+            start = api.Start(profile="Listener", briefing_plan={**plan, "hosts": hosts[:count]})
+            self.assertEqual(start.briefing_plan.hosts, hosts[:count])
+        with self.assertRaises(ValidationError):
+            api.Start(profile="Listener", briefing_plan={**plan, "hosts": hosts})
+
+
 class MatchedPanelTest(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         self.source = fixture()

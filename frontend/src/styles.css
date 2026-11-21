@@ -282,6 +282,46 @@ a { text-underline-offset: .2em; }
 .session-glass { position: fixed; inset: 0; margin: 0; width: 100%; height: 100dvh; max-width: none; max-height: none; padding: 0; border: 0; color: #f5f4df; overscroll-behavior: contain; background: radial-gradient(ellipse at 50% 32%, #4f604a91, transparent 57%), rgb(26 38 32 / 94%); -webkit-backdrop-filter: blur(18px); backdrop-filter: blur(18px); }
 .session-glass::backdrop { background: transparent; }
 .session-inner { width: min(100% - 40px, 980px); margin: auto; padding: max(22px, env(safe-area-inset-top)) 0 max(32px, env(safe-area-inset-bottom)); }
+.session-glass:has(> .talk-deck) { overflow: hidden; }
+.session-glass:has(> .talk-deck) .session-inner {
+  max-height: 100%; overflow-y: auto; overscroll-behavior: contain;
+  padding-bottom: calc(88px + env(safe-area-inset-bottom, 0px));
+}
+.talk-deck {
+  position: fixed; z-index: 3; inset-inline: 0; bottom: calc(16px + env(safe-area-inset-bottom, 0px)); margin-inline: auto;
+  display: grid; place-items: center; width: 140px; height: 60px;
+  border: 1px solid #dce7d65c; border-radius: 32px;
+  background: #344238;
+  box-shadow: inset 0 1px 2px #edf4dd52, inset 0 -1px 2px #101e1580, 0 8px 26px #09160e70;
+}
+@supports ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .talk-deck { background: linear-gradient(155deg, #667562b8, #25332cc2 70%); -webkit-backdrop-filter: blur(24px) saturate(1.45); backdrop-filter: blur(24px) saturate(1.45); }
+}
+.talk-deck[aria-pressed="true"] { border-color: #e0d497; background-color: #55573c; }
+.talk-waveform { display: flex; align-items: center; gap: 8px; pointer-events: none; }
+.talk-waveform > span { display: block; width: 10px; height: 22px; border-radius: 10px; background: #fff; }
+@media (hover: hover) and (pointer: fine) {
+  .talk-deck:enabled:hover { border-color: #e3ebd799; box-shadow: inset 0 1px 3px #edf4dd75, inset 0 -1px 2px #101e1580, 0 8px 26px #09160e90; }
+}
+@media (prefers-reduced-motion: no-preference) {
+  .talk-deck { transition: transform 160ms cubic-bezier(.23, 1, .32, 1); animation: talk-deck-arrive 280ms cubic-bezier(.23, 1, .32, 1) 420ms backwards; }
+  @keyframes talk-deck-arrive {
+    from { opacity: 0; visibility: hidden; translate: 0 14px; scale: .95; }
+    to { opacity: 1; visibility: visible; translate: 0; scale: 1; }
+  }
+  .talk-deck[aria-pressed="false"] .talk-waveform > span { transition: transform 180ms cubic-bezier(.23, 1, .32, 1); }
+  @media (hover: hover) and (pointer: fine) {
+    .talk-deck:enabled:hover { transform: translateY(-2px) scale(1.035); }
+  }
+  .talk-deck:enabled:active { transform: scale(.97); }
+}
+@media (prefers-reduced-transparency: reduce) {
+  .talk-deck { background: #344238; -webkit-backdrop-filter: none; backdrop-filter: none; }
+  .talk-deck[aria-pressed="true"] { background: #55573c; }
+}
+@media (forced-colors: active) {
+  .talk-waveform > span { background: ButtonText; forced-color-adjust: none; }
+}
 .session-heading { justify-content: space-between; }
 .session-heading h1 { font: 400 clamp(24px, 3vw, 36px)/1.2 "Questrial", sans-serif; }
 .history-empty h2 { font: 400 40px/1.08 var(--display); }
@@ -297,6 +337,7 @@ a { text-underline-offset: .2em; }
 .actor { position: absolute; display: grid; justify-items: center; text-align: center; }
 .actor .orb-meter { width: clamp(80px, 12vw, 145px); height: auto; aspect-ratio: 1; }
 .actor.host { z-index: 1; }
+.host-load[data-phase="loading"] { filter: grayscale(1) brightness(.82); }
 .actor.host .orb-meter { width: clamp(98px, 16vw, 185px); }
 .actor > span { color: #d9dfcd; margin-top: 8px; font-size: 13px; }
 .actor[data-speaking="true"] > span { color: #f2e2a2; font-weight: 600; }
@@ -379,6 +420,8 @@ a { text-underline-offset: .2em; }
   .session-glass[open] { animation: glass-open 1250ms cubic-bezier(.2,.8,.2,1) both; }
   .setup-dials { animation: dials-arrive 280ms cubic-bezier(.23,1,.32,1) 1000ms backwards; }
   .actor.host > span { animation: speaker-name 600ms ease-out 900ms backwards; }
+  .host-load[data-phase="ready"] { animation: host-color-return 240ms step-end; }
+  @keyframes host-color-return { from { filter: grayscale(1) brightness(.82); } to { filter: none; } }
   .guest { animation: bud 820ms cubic-bezier(.16,1,.3,1) both; }
   .guest > span { animation: speaker-name 820ms ease-out both; }
   .session-console, .session-heading { animation: speaker-name 720ms ease-out; }

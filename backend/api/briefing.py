@@ -35,7 +35,7 @@ class GeneratePlan(BaseModel):
     article_ids: list[str] = Field(description="Final articles, story by story.")
     profile: str
     persona_ids: list[str] = Field(description="Every persona, ordered by the listener's preferences.")
-    hosts: list[str] = Field(description="Guest experts for the panel: the listener's order, minus hosts "
+    hosts: list[str] = Field(description="Up to four guest experts: the listener's order, minus personas "
                                          "too jokey for the plan's most sensitive tone.")
     tones: dict[str, str] = Field(description="Preset tone per article (articles.tone).")
     segments: list[PlannedStory]

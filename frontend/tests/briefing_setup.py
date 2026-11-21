@@ -18,8 +18,8 @@ with sync_playwright() as p:
     for width in (320, 524, 1440):
         page = browser.new_page(viewport={'width': width, 'height': 850}, reduced_motion='reduce', has_touch=width == 320)
         starts, turns, errors = [], [], []
+        opening_route = []
         page.on('pageerror', lambda e: errors.append(str(e)))
-        page.route('**/api/recommend/catalog', lambda r: r.fulfill(json={'users': []}))
         page.route('**/api/panel/stories', lambda r: r.fulfill(json={'sample': False, 'stories': [
             {'id': 'story', 'title': 'A briefing topic', 'summary': 'Test summary', 'topic': 'Economy'}]}))
 
@@ -27,13 +27,18 @@ with sync_playwright() as p:
             starts.append(route.request.post_data_json)
             route.fulfill(json={'id': 'test', 'sample': False})
 
+        opening = {
+            'id': 'opening', 'story_id': 'story', 'story': 'A briefing topic', 'speaker': 'Host',
+            'speaker_id': 'host', 'guests': ['Expert One', 'Expert Two', 'Expert Three', 'Expert Four'],
+            'brief': 'Welcome to the panel.', 'sources': [], 'max_seconds': 8,
+        }
+
         def turn(route):
             turns.append(route.request.post_data_json)
-            names = ['Expert One', 'Expert Two', 'Expert Three', 'Expert Four']
-            route.fulfill(json={
-                'id': 'opening', 'story_id': 'story', 'story': 'A briefing topic', 'speaker': 'Host',
-                'speaker_id': 'host', 'guests': names, 'brief': 'Welcome to the panel.', 'sources': [], 'max_seconds': 8,
-            })
+            if len(turns) == 1:
+                opening_route.append(route)
+            else:
+                route.fulfill(json=opening)
 
         page.route('**/api/panel', start)
         page.route('**/api/panel/test/realtime/agents', lambda r: r.fulfill(json={
@@ -42,13 +47,9 @@ with sync_playwright() as p:
         page.route('**/api/panel/test/realtime/next', turn)
         page.route('**/api/panel/test/holding', lambda r: r.fulfill(status=404))
         page.route('**/api/panel/test', lambda r: r.fulfill(status=204))
+        page.route('https://api.openai.com/**', lambda r: r.abort())
         page.goto('http://localhost:5173/demo')
-        page.evaluate("""async () => {
-          const { RealtimeAgent } = await import('/src/realtime.ts');
-          RealtimeAgent.connect = async info => ({
-            info, speak: () => new Promise(() => {}), close() {},
-          });
-        }""")
+        expect(page.get_by_label('Listener', exact=True)).to_have_count(0)
         select_article = page.get_by_role('button', name='Select article: A briefing topic')
         if width == 320:
             card = page.locator('.selectable-stories article')
@@ -73,6 +74,37 @@ with sync_playwright() as p:
         duration = page.get_by_role('slider', name='Duration')
         experts = page.get_by_role('slider', name='Expert participants')
         expect(duration).to_have_attribute('aria-valuenow', '4')
+        page.evaluate("""async testMicrophone => {
+          const module = performance.getEntriesByType('resource')
+              .find(entry => new URL(entry.name).pathname === '/src/realtime.ts');
+          const { RealtimeAgent } = await import(module.name);
+          navigator.mediaDevices.getUserMedia = async () => {
+            if (!testMicrophone) throw new DOMException('Mocked microphone denial', 'NotAllowedError');
+            const context = new AudioContext();
+            const input = context.createOscillator();
+            const gain = context.createGain();
+            const output = context.createMediaStreamDestination();
+            gain.gain.value = 0;
+            input.connect(gain).connect(output);
+            input.start();
+            await context.resume();
+            window.testMic = { gain, track: output.stream.getAudioTracks()[0], cancelled: 0 };
+            window.testMic.track.enabled = false;
+            return output.stream;
+          };
+          RealtimeAgent.connect = async (info, _model, _microphone, handlers) => {
+            let finish;
+            return {
+              info, speak: () => new Promise(resolve => { finish = resolve; }), close() {},
+              cancel() { window.testMic.cancelled++; finish({ text: '', seconds: 1, interrupted: true }); },
+              startListening() { window.testMic.track.enabled = true; },
+              stopListening() {
+                window.testMic.track.enabled = false;
+                queueMicrotask(() => handlers.onListenerText('Next story please'));
+              },
+            };
+          };
+        }""", width == 524)
         expect(experts).to_have_attribute('aria-valuenow', '2')
         controls = page.get_by_role('group', name='Briefing controls')
         expect(controls.get_by_role('button')).to_have_count(2)
@@ -110,8 +142,27 @@ with sync_playwright() as p:
         expect(experts).to_have_attribute('aria-valuenow', '3')
         experts.press('End')
         assert page.locator('.session-inner').evaluate('e => e.scrollWidth <= e.clientWidth')
-        page.get_by_role('button', name='Begin briefing').click()
+        if width == 524:
+            page.emulate_media(reduced_motion='no-preference')
+        with page.expect_request('**/api/panel/test/realtime/next'):
+            page.get_by_role('button', name='Begin briefing').click()
+        orb = page.locator('.host-load')
+        expect(orb).to_have_attribute('data-phase', 'loading')
+        expect(orb).to_have_css('filter', 'grayscale(1) brightness(0.82)')
+        expect(page.locator('.talk-deck')).to_have_count(0)
+        if width == 524:
+            page.wait_for_function("new DOMMatrix(getComputedStyle(document.querySelector('.host-load')).transform).a < .24")
+            page.wait_for_function("new DOMMatrix(getComputedStyle(document.querySelector('.host-load')).transform).a > .85")
+        else:
+            expect(orb).to_have_css('transform', 'none')
+        opening_route.pop().fulfill(json=opening)
         expect(page.get_by_role('list', name='Topic checkpoints')).to_be_visible()
+        expect(orb).to_have_attribute('data-phase', 'ready')
+        if width == 524:
+            assert orb.evaluate('e => e.getAnimations().some(a => a.effect.getTiming().duration === 520)')
+            expect(page.locator('.talk-deck')).to_have_css('animation-name', 'talk-deck-arrive')
+        expect(orb).to_have_css('filter', 'none')
+        expect(orb).to_have_css('transform', 'none')
         assert len(starts) == len(turns) == 1
         assert starts[0]['minutes'] == 7 and starts[0]['expert_count'] == 4
         assert starts[0]['story_ids'] == ['story']
@@ -124,8 +175,42 @@ with sync_playwright() as p:
             assert a['x'] >= 0 and a['x'] + a['width'] <= width
             for b in actors[i + 1:]:
                 assert a['x'] + a['width'] <= b['x'] or b['x'] + b['width'] <= a['x'] or a['y'] + a['height'] <= b['y'] or b['y'] + b['height'] <= a['y']
+        if width == 524:
+            deck = page.get_by_role('button', name='Interrupt with microphone')
+            bars = deck.locator('.talk-waveform > span')
+            bar = bars.first
+            expect(deck).to_have_css('position', 'fixed')
+            expect(bars).to_have_count(4)
+            assert len(set(bars.evaluate_all('nodes => nodes.map(node => node.getBoundingClientRect().height)'))) == 1
+            expect(bar).to_have_css('transform', 'none')
+            deck.hover()
+            expect(deck).to_have_css('transform', 'matrix(1.035, 0, 0, 1.035, 0, -2)')
+            deck.click()
+            expect(deck).to_have_attribute('aria-pressed', 'true')
+            assert page.evaluate('window.testMic.track.enabled && window.testMic.cancelled === 1')
+            expect(bar).to_have_css('transform', 'matrix(1, 0, 0, 0.52, 0, 0)')
+            page.evaluate('window.testMic.gain.gain.value = 0.5')
+            page.wait_for_function("""() => {
+                const [edge, center] = [...document.querySelectorAll('.talk-waveform > span')]
+                    .map(bar => new DOMMatrix(getComputedStyle(bar).transform).d);
+                return edge > 1 && center > edge + .2;
+            }""")
+            page.evaluate('window.testMic.gain.gain.value = 0')
+            expect(bar).to_have_css('transform', 'matrix(1, 0, 0, 0.52, 0, 0)')
+            page.emulate_media(reduced_motion='reduce')
+            expect(bar).to_have_css('transform', 'none')
+            with page.expect_request('**/api/panel/test/realtime/next') as question:
+                deck.press('Space')
+            assert question.value.post_data_json['question'] == 'Next story please'
+            assert not page.evaluate('window.testMic.track.enabled')
+            expect(deck).to_have_attribute('aria-pressed', 'false')
+            expect(deck).to_be_enabled()
+            deck.click()
+            expect(deck).to_have_attribute('aria-pressed', 'true')
         controls.get_by_role('button', name='Stop briefing').click()
         expect(page.get_by_role('button', name='Start agent discussion')).to_be_focused()
+        if width == 524:
+            page.wait_for_function("window.testMic.track.readyState === 'ended'")
         assert not errors, errors
         print(f'{width}px: silent setup, keyboard, arc drag, realtime request and four-expert layout passed', flush=True)
         page.close()
@@ -133,13 +218,12 @@ with sync_playwright() as p:
     for preview in (True, False):
         page = browser.new_page(viewport={'width': 524, 'height': 770}, reduced_motion='reduce')
         starts = []
-        page.route('**/api/recommend/catalog', lambda r: r.fulfill(json={'users': []}))
         page.route('**/api/panel/stories', lambda r: r.fulfill(json={'sample': preview, 'stories': [
             {'id': 'story', 'title': 'A briefing topic', 'summary': 'Test summary', 'topic': 'Economy'}]}))
 
         def capture(route):
             starts.append(route.request.post_data_json)
-            route.fulfill(status=503, json={'detail': 'Test endpoint reached'})
+            route.fulfill(status=422, json={'detail': [{'loc': ['body', 'briefing_plan'], 'msg': 'Test validation error'}]})
 
         page.route('**/api/panel', capture)
         page.goto('http://localhost:5173/demo')
@@ -148,6 +232,7 @@ with sync_playwright() as p:
         page.get_by_role('button', name='Start agent discussion').click()
         expect(page.get_by_label('Playback')).to_have_count(0)
         expect(page.get_by_label('Format')).to_have_count(0)
+        expect(page.get_by_text('Drag the arcs', exact=False)).to_have_count(0)
         slider = page.get_by_role('slider', name='Expert participants')
         expect(slider).to_have_attribute('aria-disabled', 'false')
         x, y = point(slider, 90, lower=True)
@@ -164,6 +249,7 @@ with sync_playwright() as p:
         page.get_by_role('button', name='Begin briefing').click()
         if preview:
             page.wait_for_function("document.querySelector('dialog audio')?.duration > 0")
+            expect(page.get_by_role('button', name='Interrupt with microphone')).to_have_count(0)
             controls = page.get_by_role('group', name='Briefing controls')
             controls.get_by_role('button', name='Pause briefing').click()
             assert page.locator('dialog audio').evaluate('e => e.paused')
@@ -171,16 +257,15 @@ with sync_playwright() as p:
             expect(controls.get_by_role('button', name='Pause briefing')).to_be_visible()
             assert starts == []
         else:
-            expect(page.get_by_role('dialog').get_by_role('status')).to_have_text('Test endpoint reached')
+            expect(page.get_by_role('dialog').get_by_role('status')).to_have_text('Test validation error')
             assert starts[0]['mode'] == 'panel' and starts[0]['expert_count'] == 4
             page.keyboard.press('Escape')
-        print(f'{"Recorded preview" if preview else "Panel session"}: expert dial, thick progress and leading tick, focus cue and format handling passed', flush=True)
+        print(f'{"Recorded preview" if preview else "Generated panel"}: expert dial and simplified setup passed', flush=True)
         page.close()
 
     for cancel in (True, False):
         page = browser.new_page(viewport={'width': 524, 'height': 770}, reduced_motion='no-preference')
         starts = []
-        page.route('**/api/recommend/catalog', lambda r: r.fulfill(json={'users': []}))
         page.route('**/api/panel/stories', lambda r: r.fulfill(json={'sample': False, 'stories': [
             {'id': 'story', 'title': 'A briefing topic', 'summary': 'Test summary', 'topic': 'Economy'}]}))
 

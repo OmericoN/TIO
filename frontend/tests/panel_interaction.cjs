@@ -66,10 +66,9 @@ async function check(browser) {
   if (process.env.TIO_TEST_SCREENSHOT) await page.screenshot({ path: process.env.TIO_TEST_SCREENSHOT })
   await page.evaluate(() => window.finishPanelTurn())
   await turnSource(3)
-  const talk = page.getByRole('button', { name: 'Hold to talk' })
-  await talk.focus()
-  await page.keyboard.down('Space')
-  await page.keyboard.up('Space')
+  const talk = page.getByRole('button', { name: 'Interrupt with microphone' })
+  await talk.click()
+  await talk.press('Space')
   await turnSource(4)
   assert.equal(steps[3].question, 'Which quarter does this cover?')
   assert.equal(steps[3].interrupted, true)
@@ -83,7 +82,7 @@ async function check(browser) {
   await page.getByText('Briefing complete.', { exact: true }).waitFor()
   assert.equal(await page.locator('vite-error-overlay').count(), 0)
   assert.deepEqual(errors, [])
-  console.log('Panel', await page.title(), page.url(), 'typed, push-to-talk, sources, history and skip passed')
+  console.log('Panel', await page.title(), page.url(), 'typed, microphone deck, sources, history and skip passed')
   await page.close()
 }
 
