@@ -503,7 +503,7 @@ class RealtimePanelTest(unittest.IsolatedAsyncioTestCase):
         api.sessions[key] = item
         self.addCleanup(api.sessions.pop, key, None)
         briefs = iter(realtime.TurnBrief(goal=f"Goal {i}", points=[f"Point {i}"], card_ids=[], handoff=None,
-                                         action="respond", max_seconds=12, chart=None) for i in range(10))
+                                         action="respond", max_seconds=12, visual=None) for i in range(10))
         with patch.object(realtime, "make_brief", side_effect=lambda panel: next(briefs)) as plan:
             first = await api.realtime_next(key, api.RealtimeStep(generation=0))
             self.assertIn("Goal 0", first["brief"])
@@ -559,7 +559,7 @@ class RealtimeRoleTest(unittest.TestCase):
         self.assertIn(f"{host_name} is the host", instructions)
         panel.heard(line("Welcome. What stands out?", handoff=panel.personas[guest].name), [], 5)
         brief = realtime.TurnBrief(goal="Answer", points=["Growth"], card_ids=[], handoff=None, action="respond",
-                                   max_seconds=12, chart=None)
+                                   max_seconds=12, visual=None)
         self.assertIn("You are a GUEST, not the host", realtime.render_brief(panel, brief))
 
 
@@ -580,7 +580,7 @@ class SkipRequestTest(unittest.IsolatedAsyncioTestCase):
         api.sessions[key] = item
         self.addCleanup(api.sessions.pop, key, None)
         briefs = iter(realtime.TurnBrief(goal=f"Goal {i}", points=["p"], card_ids=[], handoff=None, action="respond",
-                                         max_seconds=12, chart=None) for i in range(10))
+                                         max_seconds=12, visual=None) for i in range(10))
         with patch.object(realtime, "make_brief", side_effect=lambda panel: next(briefs)) as plan:
             first = await api.realtime_next(key, api.RealtimeStep(generation=0))
             await item.brief_prefetch.task
@@ -597,31 +597,59 @@ class SkipRequestTest(unittest.IsolatedAsyncioTestCase):
             await item.brief_prefetch.task
 
 
-class FactChartTest(unittest.TestCase):
-    cards = [{"id": "1.1", "point": "Net sales rose to $6.2 million from $5.8 million", "status": "reported",
-              "sources": [{"publisher": "Zacks", "quote": "Net sales increased 6.5% to $6.2 million from $5.8 million."}]}]
+class VisualTest(unittest.TestCase):
+    cards = [{"id": "1.1", "point": "Net sales rose to $6.2 million from $5.8 million at the Hauppauge, New York plant",
+              "status": "reported",
+              "sources": [{"publisher": "Zacks", "quote": "Net sales increased 6.5% to $6.2 million from $5.8 million."}]},
+             {"id": "1.2", "point": "Revenue was $27.1 billion; comparable sales rose 5.6% and transactions 5%",
+              "status": "reported", "sources": [{"publisher": "CNBC", "quote": "Adjusted EPS was $2.56."}]}]
 
-    def chart(self, *values):
-        from discussion import realtime
-        return realtime.ChartSpec(kind="change", title="Net sales", unit="$M", points=[
-            realtime.ChartPoint(label=f"P{i}", value=v, card_id=card) for i, (v, card) in enumerate(values)])
+    def visual(self, kind, **parts):
+        from discussion import visuals
+        empty = dict(chart=None, flow=None, places=None, picture_article_id=None)
+        return visuals.Visual(kind=kind, title="T", **{**empty, **parts})
 
-    def test_only_charts_whose_figures_are_on_their_cards_are_shown(self):
-        from discussion import realtime
-        good = self.chart((5.8, "1.1"), (6.2, "1.1"))
-        self.assertIs(realtime.checked_chart(good, self.cards), good)
-        self.assertEqual(realtime.chart_payload(good, self.cards)["sources"], ["Zacks"])
-        with self.assertLogs("discussion.realtime", level="WARNING"):
-            self.assertIsNone(realtime.checked_chart(self.chart((5.8, "1.1"), (7.1, "1.1")), self.cards))  # invented
-        with self.assertLogs("discussion.realtime", level="WARNING"):
-            self.assertIsNone(realtime.checked_chart(self.chart((5.8, "1.1"), (6.2, "9.9")), self.cards))  # no card
-        with self.assertLogs("discussion.realtime", level="WARNING"):
-            self.assertIsNone(realtime.checked_chart(self.chart((6.2, "1.1")), self.cards))                # one bar
+    def chart(self, *values, unit="$M"):
+        from discussion import visuals
+        return visuals.ChartSpec(kind="bars", title="T", unit=unit, points=[
+            visuals.ChartPoint(label=f"P{i}", value=v, card_id=card) for i, (v, card) in enumerate(values)])
+
+    def problem(self, visual, pictures=None):
+        from discussion import visuals
+        return visuals.visual_problem(visual, self.cards, pictures or {})
+
+    def test_charts_need_their_figures_on_the_cards_in_one_unit(self):
+        self.assertIsNone(self.problem(self.visual("chart", chart=self.chart((5.8, "1.1"), (6.2, "1.1")))))
+        self.assertIn("not on card", self.problem(self.visual("chart", chart=self.chart((5.8, "1.1"), (7.1, "1.1")))))
+        self.assertIn("not on card", self.problem(self.visual("chart", chart=self.chart((5.8, "1.1"), (6.2, "9.9")))))
+        self.assertEqual(self.problem(self.visual("chart", chart=self.chart((6.2, "1.1")))), "1 points")
+        mixed = self.chart((27.1, "1.2"), (5.6, "1.2"), unit="")
+        self.assertEqual(self.problem(self.visual("chart", chart=mixed)), "mixed units")
+        same = self.chart((5.6, "1.2"), (5, "1.2"), unit="%")
+        self.assertIsNone(self.problem(self.visual("chart", chart=same)))
+
+    def test_flow_steps_and_map_places_come_from_the_cards(self):
+        from discussion import visuals
+        step = lambda label, card="1.1": visuals.FlowStep(label=label, card_id=card)
+        self.assertIsNone(self.problem(self.visual("flow", flow=[step("Net sales $5.8 million"), step("Rose to $6.2 million")])))
+        self.assertIn("not in the reporting", self.problem(self.visual("flow", flow=[step("Net sales"), step("Layoffs announced")])))
+        self.assertIn("figure not on its card", self.problem(self.visual("flow", flow=[step("Net sales"), step("Sales $9 million")])))
+        place = lambda name: visuals.MapPlace(name=name, latitude=40.8, longitude=-73.2, card_id="1.1")
+        self.assertIsNone(self.problem(self.visual("map", places=[place("Hauppauge, New York")])))
+        self.assertIn("not named", self.problem(self.visual("map", places=[place("Chicago")])))
+
+    def test_pictures_are_only_the_storys_own_photos(self):
+        photos = {"a1": {"url": "https://x/p.jpg", "publisher": "Zacks", "headline": "H"}}
+        self.assertIsNone(self.problem(self.visual("picture", picture_article_id="a1"), photos))
+        self.assertIsNotNone(self.problem(self.visual("picture", picture_article_id="zz"), photos))
+        from discussion import visuals
+        shown = visuals.payload(self.visual("picture", picture_article_id="a1"), self.cards, photos)
+        self.assertEqual((shown["picture"]["url"], shown["sources"]), ("https://x/p.jpg", ["Zacks"]))
 
 
-class ChartRequestTest(unittest.IsolatedAsyncioTestCase):
-    async def test_asking_for_a_chart_puts_one_on_screen(self):
-        from discussion import realtime
+class VisualRequestTest(unittest.IsolatedAsyncioTestCase):
+    async def test_asking_to_see_something_puts_it_on_screen(self):
+        from discussion import visuals
         key = uuid4()
         item = api.Session(fixture())
         item.touched = time.monotonic()
@@ -629,29 +657,17 @@ class ChartRequestTest(unittest.IsolatedAsyncioTestCase):
         self.addCleanup(api.sessions.pop, key, None)
         report = item.panel.story.articles[1]
         item.panel.reviews[item.panel.story.id] = EvidenceReview(findings=[Finding(
-            point="Growth was 6% by one estimate and 8% by another", status="disputed",
+            point="Growth was 6% by one estimate", status="reported",
             citations=[Citation(article_id=report.id, quote=report.body)])])
-        chart = realtime.ChartSpec(kind="comparison", title="Growth estimates", unit="%", points=[
-            realtime.ChartPoint(label="A", value=6, card_id="1.1"), realtime.ChartPoint(label="B", value=6, card_id="1.1")])
-        with patch.object(realtime, "model") as provider:
-            provider.return_value.generate.return_value = realtime.ChartAnswer(chart=chart)
+        point = visuals.ChartPoint(label="A", value=6, card_id="1.1")
+        visual = visuals.Visual(kind="chart", title="Growth", chart=visuals.ChartSpec(
+            kind="bars", title="Growth", unit="%", points=[point, point]), flow=None, places=None, picture_article_id=None)
+        with patch.object(visuals, "model") as provider, patch.object(visuals, "story_pictures", return_value={}):
+            provider.return_value.generate.return_value = visuals.VisualAnswer(visual=visual)
             result = await api.realtime_listen(key, api.ListenerRequest(generation=0, text="Can you draw that for me?"))
-        self.assertEqual((result["intent"], result["chart"]["title"]), ("chart", "Growth estimates"))
+        self.assertEqual((result["intent"], result["visual"]["kind"]), ("visual", "chart"))
         self.assertIn("on their screen", result["note"])
-        self.assertTrue(item.panel.wants_charts)
-        no_chart = await api.realtime_listen(key, api.ListenerRequest(generation=0, text="What does that mean?"))
-        self.assertEqual(no_chart["intent"], "question")
-
-
-class ChartUnitTest(unittest.TestCase):
-    def test_a_chart_never_mixes_units(self):
-        from discussion import realtime
-        cards = [{"id": "1.1", "point": "Revenue was $27.1 billion; comparable sales rose 5.6% and transactions 5%",
-                  "status": "reported", "sources": [{"publisher": "Zacks", "quote": "Adjusted EPS was $2.56."}]}]
-        point = lambda label, value: realtime.ChartPoint(label=label, value=value, card_id="1.1")
-        same = realtime.ChartSpec(kind="bars", title="Sales", unit="%", points=[point("Comps", 5.6), point("Traffic", 5)])
-        self.assertIs(realtime.checked_chart(same, cards), same)
-        mixed = realtime.ChartSpec(kind="bars", title="Q3", unit="", points=[point("Revenue", 27.1), point("Comps", 5.6)])
-        with self.assertLogs("discussion.realtime", level="WARNING") as logs:
-            self.assertIsNone(realtime.checked_chart(mixed, cards))
-        self.assertIn("mixed units", logs.output[0])
+        self.assertTrue(item.panel.wants_visuals)
+        self.assertEqual(item.panel.visuals_shown[item.panel.story.id], ["chart: Growth"])
+        plain = await api.realtime_listen(key, api.ListenerRequest(generation=0, text="What does that mean?"))
+        self.assertEqual(plain["intent"], "question")

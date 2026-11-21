@@ -7,8 +7,8 @@ import { BriefingSetup } from './BriefingSetup'
 import { Sources } from './BriefingHistory'
 import { audioUrl, factChecksAt, historyStore, recordedTurns } from './briefings'
 import { RealtimeAgent } from './realtime'
-import { FactChart } from './FactChart'
-import type { Chart } from './FactChart'
+import { VisualPanel } from './Visual'
+import type { Visual } from './Visual'
 import type { AgentInfo, Spoken } from './realtime'
 import type { Briefing, Card, DiscussionPlan, Entry, Headline, Preferences, Segment } from './briefings'
 
@@ -99,7 +99,7 @@ export function PanelPlayer({ owner, stories: chosenStories, preferences, record
   const [topic, setTopic] = useState(0)
   const [complete, setComplete] = useState(false)
   const [facts, setFacts] = useState<Card[]>([])
-  const [chart, setChart] = useState<Chart | null>(null)
+  const [visual, setVisual] = useState<Visual | null>(null)
   const [sample, setSample] = useState(recorded)
   const [speaker, setSpeaker] = useState('')
   const [host, setHost] = useState('Main Host')
@@ -179,14 +179,14 @@ export function PanelPlayer({ owner, stories: chosenStories, preferences, record
     const host = state.host
     // If they want another story, the backend switches now and plans its opening while the host bridges with a
     // short teaser, so the panel is ready the moment the host stops talking.
-    void post<{ intent: string; headline?: string; note?: string; chart?: Chart | null }>(`/${session.current}/realtime/listen`,
+    void post<{ intent: string; headline?: string; note?: string; visual?: Visual | null }>(`/${session.current}/realtime/listen`,
       { generation: state.generation, text })
-      .catch(() => ({ intent: 'question' as string, note: undefined, headline: undefined, chart: undefined }))
+      .catch(() => ({ intent: 'question' as string, note: undefined, headline: undefined, visual: undefined }))
       .then(result => {
         if (rt.current !== state) return
         state.skipping = result.intent === 'skip'
         if (state.skipping) setStatus(`Moving on to: ${result.headline}`)
-        if (result.chart) setChart(result.chart)  // the chart they asked for, built from the story's reporting
+        if (result.visual) setVisual(result.visual)  // what they asked to see, built from the story's reporting
         host.answer(text, result.note)
       })
     state.quiet = window.setTimeout(() => { state.listening = false; state.release?.(); state.release = undefined }, 15000)
@@ -523,7 +523,7 @@ export function PanelPlayer({ owner, stories: chosenStories, preferences, record
     while (rt.current === state) {
       type Turn = { done?: boolean; context?: string | null; id: string; speaker_id: string; speaker: string;
         guests: string[]; story: string; story_id: string; brief: string; max_seconds: number; sources: Segment['sources']
-        chart: Chart | null }
+        visual: Visual | null }
       const turn = await post<Turn>(`/${id}/realtime/next`, step)
       if (rt.current !== state) return
       if (turn.context) state.host?.context(turn.context)
@@ -536,7 +536,7 @@ export function PanelPlayer({ owner, stories: chosenStories, preferences, record
       story.title = turn.story
       if (previousStory.current !== turn.story) {
         setGuests([])
-        setChart(null)  // a new story starts without the previous story's chart
+        setVisual(null)  // a new story starts without the previous story's visual
         if (previousStory.current) await storyCue(cueContext.current ??= new AudioContext())
         previousStory.current = turn.story
       }
@@ -544,8 +544,8 @@ export function PanelPlayer({ owner, stories: chosenStories, preferences, record
       setSpeaker(turn.speaker)
       setBegun(true)
       setFacts(turn.sources)
-      // A chart appears with the line that uses it and stays up for the rest of that story.
-      setChart(previous => turn.chart ?? previous)
+      // A visual appears with the line that uses it and stays up until the next one, or the next story.
+      setVisual(previous => turn.visual ?? previous)
       setStories(lineup => {
         const index = lineup.findIndex(story => story.id === turn.story_id || story.title === turn.story)
         if (index >= 0) setTopic(index)
@@ -833,7 +833,7 @@ export function PanelPlayer({ owner, stories: chosenStories, preferences, record
       show(null)
       void next(finished.current)
     }} />
-    {chart && <FactChart key={chart.title} chart={chart} />}
+    {visual && <VisualPanel key={visual.kind + visual.title} visual={visual} />}
     {facts.length > 0 && <Sources key={active?.id + ':' + facts[0].claim} cards={facts} compact />}
     {liveWith && <button type="button" className="button" onClick={() => void finishLive()}>Back to the briefing</button>}
     {phase === 'playing' && realtimeMode && running && <button type="button" className="button talk-button"

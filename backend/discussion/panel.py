@@ -366,8 +366,8 @@ class Panel:
     speaker_turns: dict[UUID, int] = field(default_factory=dict)  # whole briefing, for intros and catchphrases
     openings: dict[UUID, list[str]] = field(default_factory=dict)  # each speaker's recent first sentences
     listener_style: list[str] = field(default_factory=list)  # lasting preferences the listener has shown
-    charted: set[str] = field(default_factory=set)  # stories that already showed a chart (realtime panel)
-    wants_charts: bool = False  # the listener asked for charts: chart every figure-heavy turn, not one per story
+    visuals_shown: dict[str, list[str]] = field(default_factory=dict)  # per story, so visuals aren't repeated
+    wants_visuals: bool = False  # the listener asked to see things: the producer shows visuals more generously
 
     def signature_lines(self, speaker):
         """Which persona lines this turn may draw on, and how. Nobody introduces themselves. The catchphrases are
@@ -607,7 +607,7 @@ Said just before the interruption:
         return replace(self, history=list(self.history), guest_turns=set(self.guest_turns),
                        speaker_turns=dict(self.speaker_turns), openings={k: list(v) for k, v in self.openings.items()},
                        last_sources=list(self.last_sources), listener_style=list(self.listener_style),
-                       charted=set(self.charted))
+                       visuals_shown={k: list(v) for k, v in self.visuals_shown.items()})
 
     def state(self):
         """What the next turn depends on, to tell whether a speculatively drafted turn is still the right one."""

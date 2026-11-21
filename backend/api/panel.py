@@ -26,7 +26,7 @@ from pydantic import BaseModel, Field, ValidationError, model_validator
 from discussion.panel import EvidenceReview, Panel, Turn, model, passages, review_event, select_stories, source_set, spoken_text
 from discussion.agents import DiscussionLine
 from voice.elevenlabs import request_session
-from discussion import realtime
+from discussion import realtime, visuals
 from discussion.matched import CompletedMatch, DiscussionPlan, InvalidMatch, matched_panel, planned_panel, test_shortlist
 from discussion.personas import AgentPersona, load_starter_personas
 from discussion.stories import INDEX, available_stories
@@ -583,15 +583,16 @@ def plan_turn(panel):
                           "story": panel.story.headline, "story_id": panel.story.id,
                           "brief": realtime.render_brief(panel, brief),
                           "max_seconds": brief.max_seconds, "sources": sources,
-                          "chart": realtime.chart_payload(brief.chart, list(cards.values()))}
+                          "visual": visuals.payload(brief.visual, list(cards.values()),
+                                                    visuals.story_pictures(panel.story)
+                                                    if brief.visual and brief.visual.kind == "picture" else {})}
 
 
 def start_brief_prefetch(item):
     """Plan the brief after the one being spoken, assuming its points get made, while the agent is still talking."""
     token, brief, _, cards = item.brief_pending
     panel = item.panel.fork()
-    if brief.chart:
-        panel.charted.add(panel.story.id)
+    visuals.remember(panel, brief.visual)
     panel.heard(realtime.brief_turn(brief), cards, brief.max_seconds * 0.8, True)
     if panel.index == len(panel.stories):
         return
@@ -615,25 +616,25 @@ async def realtime_listen(key: UUID, body: ListenerRequest):
     item = session(key)
     if body.generation != item.generation:
         raise HTTPException(409, "Turn superseded.")
-    if realtime.CHART_REQUEST.search(body.text) and item.panel.index < len(item.panel.stories):
-        # Charts come from the reporting, not from the agents: build one now from the story's fact cards.
-        item.panel.wants_charts = True
-        try:
-            chart = await run_in_threadpool(realtime.chart_for_story, item.panel, body.text)
-        except (MatchProcessingError, ValueError) as exc:
-            log.warning("Listener chart failed: %s", exc)
-            chart = None
+    if visuals.VISUAL_REQUEST.search(body.text) and item.panel.index < len(item.panel.stories):
+        # Visuals come from the reporting, not from the agents: build one now from the story's fact cards.
+        item.panel.wants_visuals = True
         cards = realtime.story_cards(item.panel)
-        if chart:
-            item.panel.charted.add(item.panel.story.id)
-            return {"intent": "chart", "chart": realtime.chart_payload(chart, cards),
-                    "note": (f"The listener asked for a chart, and one is now on their screen: \"{chart.title}\". Say "
-                             f"so, then talk them through what it shows in two or three sentences, naming the outlet. "
-                             f"Don't read out every number. From now on the panel shows charts whenever figures come up.")}
-        return {"intent": "chart", "chart": None,
-                "note": ("The listener asked for a chart, but this story's reporting has no figures that can be compared "
-                         "honestly. Say that plainly in a sentence, mention the panel will show charts when numbers come "
-                         "up, then answer what they're after from the facts you have.")}
+        try:
+            visual = await run_in_threadpool(visuals.for_listener, item.panel, body.text, cards)
+        except (MatchProcessingError, ValueError) as exc:
+            log.warning("Listener visual failed: %s", exc)
+            visual = None
+        if visual:
+            pictures = visuals.story_pictures(item.panel.story)
+            visuals.remember(item.panel, visual)
+            return {"intent": "visual", "visual": visuals.payload(visual, cards, pictures),
+                    "note": (f"The listener asked to see something, and {visuals.describe(visual, pictures)} is now on "
+                             f"their screen. Say so, then talk them through it in two or three sentences, naming the "
+                             f"outlet. Don't read out everything on it. From now on the panel shows more visuals.")}
+        return {"intent": "visual", "visual": None,
+                "note": ("The listener asked to see something, but this story's reporting has nothing that can be shown "
+                         "honestly. Say that plainly in a sentence, then answer what they're after from the facts.")}
     target = item.panel.requested_story(body.text)
     if target is None:
         item.jump = None
@@ -666,8 +667,7 @@ async def realtime_next(key: UUID, step: RealtimeStep):
         if token != step.heard:
             raise HTTPException(409, "Acknowledge the active segment first.")
         said = spoken_text(step.text)
-        if brief.chart:
-            item.panel.charted.add(item.panel.story.id)
+        visuals.remember(item.panel, brief.visual)
         item.panel.heard(realtime.brief_turn(brief, said or None), cards, step.seconds or brief.max_seconds,
                          not step.interrupted)
         item.brief_pending = None
