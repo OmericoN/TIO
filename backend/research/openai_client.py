@@ -1,5 +1,6 @@
 import json
 import logging
+import time
 from http.client import HTTPException
 from typing import TypeVar
 from urllib.error import HTTPError, URLError
@@ -22,6 +23,25 @@ class OpenAIClient:
             raise RuntimeError("Set OPENAI_API_KEY in the environment or repository root .env.")
         self.api_key = api_key
         self.model = model
+
+    RETRY_STATUS = {429, 500, 502, 503, 504}
+    RETRY_DELAYS = (1, 3)  # seconds before the second and third attempts
+
+    def _post(self, request, stage):
+        """Sends the request, retrying OpenAI's transient failures (rate limits, 5xx, timeouts) twice."""
+        for attempt, delay in enumerate((*self.RETRY_DELAYS, None)):
+            try:
+                with urlopen(request, timeout=90) as response:
+                    return json.load(response)
+            except HTTPError as exc:
+                if delay is None or exc.code not in self.RETRY_STATUS:
+                    raise
+                logger.warning("OpenAI HTTP %d during %s; retrying (attempt %d)", exc.code, stage, attempt + 2)
+            except (TimeoutError, URLError):
+                if delay is None:
+                    raise
+                logger.warning("OpenAI connection failed during %s; retrying (attempt %d)", stage, attempt + 2)
+            time.sleep(delay)
 
     def generate(
         self, stage: str, instructions: str, data: dict, output_type: type[OutputModel]
@@ -49,8 +69,7 @@ class OpenAIClient:
         )
         request.add_unredirected_header("Authorization", f"Bearer {self.api_key}")
         try:
-            with urlopen(request, timeout=90) as response:
-                result = json.load(response)
+            result = self._post(request, stage)
             usage = result["usage"]
             logger.info(
                 "persona_match stage=%s model=%s input_tokens=%d cached_input_tokens=%d output_tokens=%d",

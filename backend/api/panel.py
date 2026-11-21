@@ -23,7 +23,7 @@ from fastapi.responses import StreamingResponse
 from psycopg.rows import dict_row
 from pydantic import BaseModel, Field, ValidationError, model_validator
 
-from discussion.panel import Panel, Turn, model, passages, review_event, select_stories, source_set, spoken_text
+from discussion.panel import EvidenceReview, Panel, Turn, model, passages, review_event, select_stories, source_set, spoken_text
 from discussion.agents import DiscussionLine
 from voice.elevenlabs import request_session
 from discussion import realtime
@@ -188,7 +188,13 @@ def make_panel(start):
         rows = [{**a.model_dump(mode="json", exclude={"body"}),
                  "passages": [e.excerpt for e in excerpts if e.article_id == a.id]}
                 for a in source_set(story)]
-        panel.reviews[story.id] = review_event(model().model, json.dumps(rows, ensure_ascii=False), stage)
+        try:
+            panel.reviews[story.id] = review_event(model().model, json.dumps(rows, ensure_ascii=False), stage)
+        except (MatchProcessingError, ValueError) as exc:
+            # One story's review failing (e.g. OpenAI down after retries) shouldn't stop the briefing: the story
+            # plays without reviewed facts and its lead passage becomes its only fact card.
+            log.warning("Evidence review skipped for %r: %s", story.headline, exc)
+            panel.reviews[story.id] = EvidenceReview(findings=[])
     return panel
 
 

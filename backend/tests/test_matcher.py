@@ -159,7 +159,7 @@ class AdapterTest(unittest.TestCase):
             }).encode())
 
         send.side_effect = [response("serious"), response("happy"), response("somber", "length"),
-                            io.BytesIO(b"{}"), URLError("offline")]
+                            io.BytesIO(b"{}"), *[URLError("offline")] * 3]  # a connection error is retried twice
         with self.assertLogs("research.openai_client", level="INFO") as logs:
             result = client.generate("classification", "instructions", {}, Classifications)
         self.assertEqual(result.articles[0].desired_tone, "serious")
@@ -169,9 +169,10 @@ class AdapterTest(unittest.TestCase):
         schema = json.loads(request.data)["response_format"]["json_schema"]
         self.assertTrue(schema["strict"])
         self.assertFalse(schema["schema"]["additionalProperties"])
-        for _ in range(4):
-            with self.assertRaises(MatchProcessingError):
-                client.generate("classification", "instructions", {}, Classifications)
+        with patch("research.openai_client.time.sleep"):
+            for _ in range(4):
+                with self.assertRaises(MatchProcessingError):
+                    client.generate("classification", "instructions", {}, Classifications)
 
     @patch("research.openai_client.urlopen")
     @patch.dict("os.environ", {"OPENAI_API_KEY": ""})
@@ -214,3 +215,36 @@ class LiveMatcherTest(unittest.TestCase):
         self.assertIn(tones["en"], ("analytical", "neutral"))
         self.assertIn(tones["nl"], ("analytical", "neutral"))
         self.assertEqual(result["agent_ids"], [sober])
+
+
+class RetryTest(unittest.TestCase):
+    def test_transient_openai_errors_are_retried(self):
+        from io import BytesIO
+        from urllib.error import HTTPError
+        from research import openai_client
+        body = json.dumps({"usage": {"prompt_tokens": 1, "completion_tokens": 1}, "choices": [{
+            "finish_reason": "stop", "message": {"content": json.dumps({"personas": []})}}]}).encode()
+        failures = [HTTPError("u", 500, "err", {}, None), HTTPError("u", 429, "slow", {}, None)]
+
+        def flaky(request, timeout):
+            if failures:
+                raise failures.pop(0)
+            return BytesIO(body)
+
+        with patch.object(openai_client, "urlopen", side_effect=flaky), patch.object(openai_client.time, "sleep"):
+            result = OpenAIClient("key").generate("ranking", "", {}, Ratings)
+        self.assertEqual(result.personas, [])
+        self.assertEqual(failures, [])
+
+    def test_a_bad_request_is_not_retried(self):
+        from urllib.error import HTTPError
+        from research import openai_client
+        calls = []
+
+        def broken(request, timeout):
+            calls.append(1)
+            raise HTTPError("u", 400, "bad", {}, None)
+
+        with patch.object(openai_client, "urlopen", side_effect=broken), self.assertRaises(MatchProcessingError):
+            OpenAIClient("key").generate("ranking", "", {}, Ratings)
+        self.assertEqual(len(calls), 1)
