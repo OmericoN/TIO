@@ -5,7 +5,7 @@ import { NewsWorkspace } from './NewsWorkspace'
 import { sampleArticle } from './briefings'
 import { AudioRibbon, Brand } from './Brand'
 import { VoiceAuditions } from './VoiceAuditions'
-import { BriefingLengthPicker } from './BriefingLengthPicker'
+import { InterestFields } from './InterestFields'
 import './styles.css'
 
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL?.trim().replace(/\/+$/, '')
@@ -16,17 +16,7 @@ const demoAvailable = import.meta.env.DEV && ['localhost', '127.0.0.1', '[::1]']
 const externalTermsUrl = import.meta.env.VITE_TERMS_URL?.trim()
 const bundledTermsPath = '/terms-v1.html'
 const termsUrl = externalTermsUrl?.startsWith('https://') ? externalTermsUrl : bundledTermsPath
-const signupSteps = ['About you', 'Preferences', 'Voices', 'Your account']
 const fieldClass = 'form-field'
-const interestOptions = [
-  'Stock markets', 'Technology', 'Central banks and inflation',
-  'Currencies', 'Energy and commodities', 'Company earnings',
-  'Artificial intelligence', 'Climate and clean energy', 'Science and space',
-  'Health and biotech', 'Housing and real estate', 'Jobs and the economy',
-  'Personal finance', 'Startups and entrepreneurship', 'Global trade',
-  'Politics and geopolitics', 'Food and agriculture', 'Transport and mobility',
-  'Media and entertainment', 'Sports business',
-]
 
 function OnboardingFields({ step }: { step: number }) {
   return (
@@ -83,24 +73,7 @@ function OnboardingFields({ step }: { step: number }) {
             </select>
           </label>
         </div>
-        <label className="block text-sm font-medium">
-          What do you want from your briefing?
-          <textarea name="listener_goal" rows={3} required maxLength={500} className={fieldClass} />
-        </label>
-        <BriefingLengthPicker />
-        <fieldset className="interest-options">
-          <legend className="mb-2 text-sm font-medium">Which topics interest you?</legend>
-          {interestOptions.map(interest => (
-            <label key={interest} className="interest-choice">
-              <input type="checkbox" name="interests" value={interest} />
-              {interest}
-            </label>
-          ))}
-          <label className="block text-sm font-medium">
-            Other interests (optional)
-            <input name="other_interests" type="text" maxLength={300} className={fieldClass} />
-          </label>
-        </fieldset>
+        <InterestFields />
       </fieldset>
     </>
   )
@@ -119,7 +92,7 @@ function TermsAgreement() {
 }
 
 function App() {
-  const [account, setAccount] = useState<{ owner: string; listenerId?: string }>()
+  const [account, setAccount] = useState<{ owner: string; onboarding: unknown; listenerId?: string }>()
   const [pending, setPending] = useState(false)
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
@@ -131,7 +104,7 @@ function App() {
 
   useEffect(() => {
     authRef.current?.querySelector<HTMLElement>(
-      'fieldset:not([hidden]) > label > input, fieldset:not([hidden]) select:not(fieldset[hidden] select), .voice-auditions input',
+      'fieldset:not([hidden]) > label > input, fieldset:not([hidden]) select:not(fieldset[hidden] select), #voice-auditions-title',
     )?.focus()
   }, [creatingAccount, step])
 
@@ -193,10 +166,6 @@ function App() {
         setError('Select an interest or enter your own.')
         return
       }
-      if (!text('listener_goal')) {
-        setError('Enter your briefing goal.')
-        return
-      }
       setStep(2)
       return
     }
@@ -228,8 +197,8 @@ function App() {
         gender: text('gender') || null,
         preferred_language: primaryLanguage,
         secondary_language: secondaryLanguage || null,
-        listener_goal: text('listener_goal'),
-        briefing_length_minutes: Number(text('briefing_length_minutes')) || null,
+        // The existing signup trigger requires a goal; use the selected topics.
+        listener_goal: interests.join(', '),
         interests_text: interests.join(', '),
         preferred_persona_ids: preferredPersonaIds,
         accepted_terms: true,
@@ -291,6 +260,8 @@ function App() {
         signal: AbortSignal.timeout(15000),
       }).catch(() => null)
       setAccount({ owner: 'account-' + (session.user?.id || email.toLowerCase()),
+        onboarding: session.user?.user_metadata?.tio_onboarding ?? data?.tio_onboarding,
+        // The recommender and briefing endpoints only serve local development for now.
         listenerId: demoAvailable ? session.user?.id : undefined })
     } catch {
       setError('Could not reach Supabase. Try again.')
@@ -303,40 +274,22 @@ function App() {
 
   return (
     <main className="auth-page">
-      <header className="masthead"><div className="masthead-inner"><div className="brand-lockup"><Brand /><span className="publication">The Liquid Briefing</span></div></div></header>
-      <div className={creatingAccount ? 'auth-layout signup-layout' : 'auth-layout'}>
-        <aside className="auth-cover">
-          <AudioRibbon />
-          <div><h2>The Liquid <em>Briefing</em></h2><p>Personalized audio news with the sources behind every story.</p></div>
-        </aside>
+      <header className="masthead" aria-hidden="true"><AudioRibbon /></header>
+      <div className="auth-layout">
         <section ref={authRef} aria-labelledby="login-title" className="auth-form">
-          <h1 id="login-title">{creatingAccount ? 'Create a TIO account' : 'Sign in to TIO'}</h1>
-          {creatingAccount && (
-            <ol className="signup-progress" aria-label="Signup progress">
-              {signupSteps.map((label, index) => (
-                <li key={label} aria-current={index === step ? 'step' : undefined}>
-                  {label}
-                </li>
-              ))}
-            </ol>
-          )}
+          <h1 id="login-title">{creatingAccount ? <>Create a <Brand /> account</> : <>Sign in to <Brand /></>}</h1>
+          {creatingAccount && <p className="mt-2 text-sm text-slate-600">Step {step + 1} of 4</p>}
           <form key={action} onSubmit={submitAuth} noValidate className="mt-6 space-y-4">
             {creatingAccount && <OnboardingFields step={step} />}
-            {creatingAccount && step === 2 && (
-              <VoiceAuditions
-                selectedIds={preferredPersonaIds}
-                onToggle={id => {
-                  if (!preferredPersonaIds.includes(id) && preferredPersonaIds.length >= 3) {
-                    setError('You can pick up to three voices. Remove one before adding another.')
-                    return
-                  }
-                  setError('')
-                  setPreferredPersonaIds(ids => (
-                    ids.includes(id) ? ids.filter(selectedId => selectedId !== id) : [...ids, id]
-                  ))
-                }}
-              />
-            )}
+            {creatingAccount && step === 2 && <VoiceAuditions selectedIds={preferredPersonaIds}
+              onToggle={id => {
+                if (!preferredPersonaIds.includes(id) && preferredPersonaIds.length >= 3) {
+                  setError('You can pick up to three voices. Remove one before adding another.')
+                  return
+                }
+                setError('')
+                setPreferredPersonaIds(ids => ids.includes(id) ? ids.filter(selected => selected !== id) : [...ids, id])
+              }} />}
             <fieldset hidden={creatingAccount && step !== 3} className="space-y-4">
               {creatingAccount && <legend className="pr-2 font-semibold">Your account</legend>}
               <label className="block text-sm font-medium">

@@ -11,6 +11,7 @@ from unittest.mock import Mock, patch
 from uuid import uuid4
 
 from fastapi import HTTPException
+from pydantic import ValidationError
 
 from api import panel as api
 from discussion.costs import project
@@ -33,6 +34,46 @@ def line(text="Let's hear from the panel.", action="respond", citations=(), hand
 
 
 class PanelTest(unittest.TestCase):
+    def test_session_expert_count_and_minutes(self):
+        panel = fixture()
+        catalog = dict(panel.personas)
+        original = next(p for p in catalog.values() if p.slug != "main-host")
+        for number in (3, 4):
+            persona = original.model_copy(update={"id": uuid4(), "slug": f"expert-{number}", "name": f"Expert {number}"})
+            catalog[persona.id] = persona
+        with patch.object(api, "news_events", return_value=panel.stories), patch.object(api, "INDEX") as index, \
+                patch.object(api, "load_starter_personas", return_value=catalog), patch.object(api, "review_event"), patch.object(api, "model"):
+            index.exists.return_value = False
+            for count in (2, 3, 4):
+                result = api.make_panel(api.Start(profile="Listener", story_ids=[panel.story.id], minutes=7, expert_count=count))
+                self.assertEqual((result.minutes, len(result.roster)), (7, count))
+                self.assertNotIn(result.host, result.roster)
+                self.assertEqual(len(set(result.roster)), count)
+            solo = api.make_panel(api.Start(profile="Listener", story_ids=[panel.story.id], mode="presenter", expert_count=4))
+            self.assertEqual(solo.roster, [])
+            catalog.pop(persona.id)
+            with self.assertRaisesRegex(ValueError, "Only 3 experts are available"):
+                api.make_panel(api.Start(profile="Listener", story_ids=[panel.story.id], expert_count=4))
+        for invalid in (1, 5, 2.5, "3", True):
+            with self.assertRaises(ValidationError):
+                api.Start(profile="Listener", expert_count=invalid)
+
+    def test_expert_count_reaches_database_matcher(self):
+        panel = fixture()
+        catalog = list(panel.personas.values())
+        original = catalog[-1]
+        catalog += [original.model_copy(update={"id": uuid4(), "slug": f"expert-{i}"}) for i in (3, 4)]
+        with patch.object(api, "news_events", return_value=panel.stories), patch.object(api, "INDEX") as index, \
+                patch.object(api.psycopg, "connect") as db, patch.object(api, "matcher") as matcher:
+            index.exists.return_value = True
+            db.return_value.__enter__.return_value.execute.return_value = [p.model_dump() for p in catalog]
+            for count in (3, 4):
+                ids = [str(p.id) for p in catalog if p.slug != "main-host"][:count]
+                matcher.return_value.match_personas.return_value = {"agent_ids": ids, "articles": []}
+                result = api.indexed_or_sample_panel(api.Start(profile="Listener", story_ids=[panel.story.id], expert_count=count))
+                self.assertEqual(len(result.roster), count)
+                self.assertEqual(matcher.return_value.match_personas.call_args.args[-1], count)
+
     def test_feed_uses_matching_database_thumbnails(self):
         stories = fixture().stories
         article = stories[0].articles[1]
@@ -283,6 +324,7 @@ class InterruptionTest(unittest.IsolatedAsyncioTestCase):
                 await pending
             self.assertEqual(exc.exception.status_code, 409)
             segment = await api.next_segment(key, api.Step(generation=1, question="Which source?"))
+            self.assertEqual(segment["story_id"], item.panel.story.id)
             await item.prefetch.task  # let the speculative next turn finish while the mocks are active
             await api.interrupt(key, api.Step(generation=2, heard=segment["id"], seconds=0.5))
             self.assertIsNone(item.pending)

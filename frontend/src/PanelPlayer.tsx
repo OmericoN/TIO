@@ -2,20 +2,19 @@ import { CommitStrategy, Conversation, useScribe } from '@elevenlabs/react'
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { CSSProperties } from 'react'
 import { AgentStage } from './AgentStage'
+import { Icon } from './Brand'
+import { BriefingSetup } from './BriefingSetup'
 import { Sources } from './BriefingHistory'
-import { audioUrl, historyStore, recordedTurns } from './briefings'
+import { audioUrl, factChecksAt, historyStore, recordedTurns } from './briefings'
 import { RealtimeAgent } from './realtime'
 import type { AgentInfo, Spoken } from './realtime'
-import type { Briefing, DiscussionPlan, Entry, Headline, Preferences, Segment } from './briefings'
+import type { Briefing, Card, DiscussionPlan, Entry, Headline, Preferences, Segment } from './briefings'
 
 async function post<T>(url: string, body = {}): Promise<T> {
   const response = await fetch('/api/panel' + url, {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
   })
-  if (!response.ok) {
-    const detail = (await response.json().catch(() => null))?.detail
-    throw new Error(typeof detail === 'string' ? detail : detail?.[0]?.msg || 'Panel unavailable. Check the backend connection.')
-  }
+  if (!response.ok) throw new Error((await response.json().catch(() => null))?.detail || 'Panel unavailable. Check the backend connection.')
   return response.json()
 }
 
@@ -66,16 +65,38 @@ type Props = {
   owner: string
   stories: Headline[]
   preferences: Preferences
-  plan?: DiscussionPlan
   recorded: boolean
+  canGenerateSample: boolean
   origin: { x: number; y: number; context: AudioContext | null }
+  // A signed-in listener: the briefing is planned from their recommended feed and picks once they confirm.
+  listener?: { id: string; articleIds: string[]; selectedIds: string[] }
   onClose: () => void
 }
 
-export function PanelPlayer({ owner, stories, preferences, plan, recorded, origin, onClose }: Props) {
+async function postJson<T>(url: string, body: object): Promise<T> {
+  const response = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+  const result = await response.json().catch(() => null)
+  if (!response.ok) throw new Error(typeof result?.detail === 'string' ? result.detail : 'The briefing could not be planned.')
+  return result
+}
+
+export function PanelPlayer({ owner, stories: chosenStories, preferences, recorded: recordedDefault, canGenerateSample, origin, listener, onClose }: Props) {
+  // The agenda: the chosen headlines, replaced by the planned lineup for a signed-in listener.
+  const [stories, setStories] = useState<Headline[]>(chosenStories.length ? chosenStories
+    : [{ id: 'planning', title: 'Your briefing', topic: '', summary: '' }])
+  const [recorded, setRecorded] = useState(recordedDefault)
   const [running, setRunning] = useState(true)
-  const [status, setStatus] = useState('Opening your briefing…')
+  const [status, setStatus] = useState('')
+  const [phase, setPhase] = useState<'setup' | 'confirming' | 'playing'>('setup')
+  const [minutes, setMinutes] = useState(preferences.minutes)
+  const [mode, setMode] = useState(preferences.mode)
+  const [experts, setExperts] = useState(2)
+  const confirmed = useRef(false)
   const [active, setActive] = useState<Segment | null>(null)
+  const [begun, setBegun] = useState(false)
+  const [topic, setTopic] = useState(0)
+  const [complete, setComplete] = useState(false)
+  const [facts, setFacts] = useState<Card[]>([])
   const [sample, setSample] = useState(recorded)
   const [speaker, setSpeaker] = useState('')
   const [host, setHost] = useState('Main Host')
@@ -204,6 +225,11 @@ export function PanelPlayer({ owner, stories, preferences, plan, recorded, origi
   }
 
   useEffect(() => { consolePanel.current?.scrollTo(0, 0) }, [active?.id])
+  useEffect(() => {
+    dialog.current?.querySelector('[aria-current="step"]')?.scrollIntoView({
+      block: 'nearest', inline: 'center', behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'instant' : 'smooth',
+    })
+  }, [topic, begun])
 
   function save(entry: Entry) {
     if (record.entries.some(e => e.id === entry.id)) return
@@ -213,8 +239,11 @@ export function PanelPlayer({ owner, stories, preferences, plan, recorded, origi
 
   function introduce() {
     const line = current.current, audio = player.current
-    if (!line || !audio || audio.paused) return
-    const spoken = Number.isFinite(audio.duration) ? audio.currentTime / audio.duration : 0
+    if (!line || !audio) return
+    const spoken = Number.isFinite(audio.duration) && audio.duration > 0 ? audio.currentTime / audio.duration : 0
+    const cues = factChecksAt(line, spoken)
+    setFacts(previous => previous.length === cues.length && previous.every(c => cues.includes(c)) ? previous : cues)
+    if (audio.paused) return
     const appearing = line.guests.filter(name => {
       if (line.speaker === name) return true
       const at = line.text.toLowerCase().indexOf(name.toLowerCase())
@@ -227,6 +256,11 @@ export function PanelPlayer({ owner, stories, preferences, plan, recorded, origi
     current.current = segment
     if (segment) finished.current = null
     setActive(segment)
+    setFacts(segment ? factChecksAt(segment, 0) : [])
+    if (segment) {
+      const index = stories.findIndex(story => segment.story_id ? story.id === segment.story_id : story.title === segment.story)
+      if (index >= 0) setTopic(index)
+    }
     const audio = player.current
     if (!audio) return
     audio.pause()
@@ -295,7 +329,7 @@ export function PanelPlayer({ owner, stories, preferences, plan, recorded, origi
         await before  // let the holding line finish rather than cutting it off mid-sentence
         if (session.current !== id || generation.current !== gen) return
       }
-      if ('done' in result) { end(); setStatus('Briefing complete.'); return }
+      if ('done' in result) { setComplete(true); end(); setStatus('Briefing complete.'); return }
       setStatus('')
       show(result)
     } catch (e) { if (id === session.current && gen === generation.current) fail(e) }
@@ -352,7 +386,6 @@ export function PanelPlayer({ owner, stories, preferences, plan, recorded, origi
 
   useEffect(() => {
     const audio = player.current!
-    void start()
     return () => {
       generation.current++
       audio.pause()
@@ -362,24 +395,52 @@ export function PanelPlayer({ owner, stories, preferences, plan, recorded, origi
     }
   }, [])
 
+  async function confirm() {
+    if (confirmed.current) return
+    confirmed.current = true
+    setPhase('confirming')
+    const gen = generation.current
+    if (!matchMedia('(prefers-reduced-motion: reduce)').matches) {
+      const dials = dialog.current?.querySelector('.setup-dials')
+      const orb = dialog.current?.querySelector('.host-confirm')
+      const digest = dials?.animate([{ transform: 'scale(1)', opacity: 1 }, { transform: 'scale(.36)', opacity: 0 }],
+        { duration: 280, easing: 'cubic-bezier(.77,0,.175,1)', fill: 'forwards' })
+      const drop = orb?.animate([{ transform: 'scale(1.07,.89)' }, { transform: 'scale(.94,1.09)', offset: .4 }, { transform: 'scale(1)' }],
+        { duration: 480, easing: 'cubic-bezier(.34,1.56,.64,1)' })
+      await Promise.allSettled([digest?.finished, drop?.finished])
+    }
+    if (generation.current !== gen) return
+    setPhase('playing')
+    void start()
+  }
+
   function advanceSample() {
     const line = sampleQueue.current.shift()
     if (line) { setStatus(''); show(line) }
-    else { end(); setStatus('Briefing complete.') }
+    else { setComplete(true); end(); setStatus('Briefing complete.') }
   }
 
   async function start() {
     const gen = ++generation.current
     if (recorded) {
+      record.sample = true
+      setSample(true)
       sampleQueue.current = recordedTurns(stories)
       advanceSample()
       return
     }
-    setStatus('Preparing your briefing…')
+    setStatus('Preparing your selected headlines…')
     try {
-      const lineup = plan ? { briefing_plan: plan } : { story_ids: stories.map(s => s.id) }
-      const mode = 'panel'
-      const result = await post<{ id: string; sample: boolean }>('', { ...preferences, mode, ...lineup })
+      // A signed-in listener's briefing is planned now, from their feed, picks, and the minutes and experts just
+      // chosen; otherwise the panel discusses the selected headlines.
+      let lineup: object = { expert_count: experts, story_ids: stories.map(s => s.id) }
+      if (listener) {
+        setStatus('Planning your briefing…')
+        const plan = await planBriefing(listener)
+        if (generation.current !== gen) return
+        lineup = { briefing_plan: plan }
+      }
+      const result = await post<{ id: string; sample: boolean }>('', { ...preferences, mode: 'panel', minutes, ...lineup })
       if (generation.current !== gen) {
         await fetch('/api/panel/' + result.id, { method: 'DELETE' })
         return
@@ -392,7 +453,15 @@ export function PanelPlayer({ owner, stories, preferences, plan, recorded, origi
       if (liveShow) await startShow(gen)
       else if (realtimeMode) await startRealtime(gen)
       else await next()
-    } catch (e) { if (generation.current === gen) fail(e) }
+    } catch (e) {
+      if (generation.current === gen) {
+        fail(e)
+        confirmed.current = false
+        setRunning(true)
+        setPhase('setup')
+        dialog.current?.querySelector('.setup-dials')?.getAnimations().forEach(animation => animation.cancel())
+      }
+    }
   }
 
   // Realtime panel: connect every agent, then loop: fetch the next brief (usually planned while the previous agent
@@ -449,12 +518,12 @@ export function PanelPlayer({ owner, stories, preferences, plan, recorded, origi
     let step: object = { generation: gen - sessionStart.current }
     while (rt.current === state) {
       type Turn = { done?: boolean; context?: string | null; id: string; speaker_id: string; speaker: string;
-        guests: string[]; story: string; brief: string; max_seconds: number; sources: Segment['sources'] }
+        guests: string[]; story: string; story_id: string; brief: string; max_seconds: number; sources: Segment['sources'] }
       const turn = await post<Turn>(`/${id}/realtime/next`, step)
       if (rt.current !== state) return
       if (turn.context) state.host?.context(turn.context)
       // Every agent hears the panel: each spoken line goes to all of them, so guests can react to each other.
-      if (turn.done) { end(); setStatus('Briefing complete.'); return }
+      if (turn.done) { setComplete(true); end(); setStatus('Briefing complete.'); return }
       await waitForListener()
       setStatus(liveStatus)
       const agent = state.agents.get(turn.speaker_id)
@@ -467,6 +536,13 @@ export function PanelPlayer({ owner, stories, preferences, plan, recorded, origi
       }
       setGuests(turn.guests)
       setSpeaker(turn.speaker)
+      setBegun(true)
+      setFacts(turn.sources)
+      setStories(lineup => {
+        const index = lineup.findIndex(story => story.id === turn.story_id || story.title === turn.story)
+        if (index >= 0) setTopic(index)
+        return lineup
+      })
       const voice = agents.find(a => a.id === turn.speaker_id)?.voice
       const line: Segment = { id: turn.id, story: turn.story, speaker: voice ? `${turn.speaker} · ${voice}` : turn.speaker, host: hostInfo.name,
         guests: turn.guests, text: '…', sources: turn.sources }
@@ -652,6 +728,24 @@ export function PanelPlayer({ owner, stories, preferences, plan, recorded, origi
     await next()
   }
 
+  // Fits the listener's feed and picks to the chosen minutes, with the chosen number of experts, and shows the
+  // planned stories as the agenda.
+  async function planBriefing(who: NonNullable<typeof listener>): Promise<DiscussionPlan> {
+    const plan = await postJson<DiscussionPlan & { segments: { article_ids: string[] }[] }>('/api/briefing/generate', {
+      user_id: who.id, article_ids: who.articleIds, selected_article_ids: who.selectedIds, minutes,
+      mode: 'debate', expert_count: experts,
+    })
+    const ids = plan.segments.map(segment => segment.article_ids[0])
+    if (!ids.length) throw new Error('No stories are available for this briefing.')
+    const found = await postJson<Record<string, { headline: string; publication: string }>>('/api/recommend/lookup', { article_ids: ids })
+      .catch(() => ({} as Record<string, { headline: string; publication: string }>))
+    const lineup = ids.map(id => ({ id, title: found[id]?.headline ?? chosenStories.find(s => s.id === id)?.title ?? 'Story',
+      topic: found[id]?.publication ?? '', summary: '' }))
+    setStories(lineup)
+    record.titles = lineup.map(story => story.title)
+    return { segments: plan.segments, hosts: plan.hosts, tones: plan.tones } as DiscussionPlan
+  }
+
   async function microphone() {
     const id = session.current
     try {
@@ -661,21 +755,65 @@ export function PanelPlayer({ owner, stories, preferences, plan, recorded, origi
     } catch { setStatus('Could not enable the microphone. You can type your question.') }
   }
 
-  return <dialog ref={dialog} className="session-glass" aria-labelledby="room-title"
+  const closeLabel = phase === 'playing' && running ? 'Stop briefing' : 'Close briefing'
+  const playbackLabel = speaker ? 'Pause briefing' : 'Play briefing'
+
+  return <dialog ref={dialog} className="session-glass" data-setup={phase !== 'playing'} aria-labelledby="room-title"
     style={{ '--launch-x': origin.x + 'px', '--launch-y': origin.y + 'px' } as CSSProperties}
     onCancel={e => { e.preventDefault(); onClose() }}>
     <div className="session-inner">
-      <div className="session-intro"><header className="session-heading"><div><h1 id="room-title">Your briefing</h1>
-        <p>{recorded ? 'Recorded sample' : realtimeMode ? 'Live speech-to-speech' : 'Synthetic narration'}{sample ? ' · Fictional reporting' : ''}</p></div>
-        <button autoFocus onClick={onClose} className="room-close">{running ? 'End session' : 'Close'}</button>
-      </header><h2 className="session-headline">{active?.story ?? stories[0].title}</h2></div>
-      <AgentStage audio={player} origin={origin} host={host} guests={guests} speaker={speaker} />
+      <div className="session-intro">
+        <header className="session-heading">
+          <h1 id="room-title">Your briefing</h1>
+          <p className="sr-only">{recorded ? 'Recorded sample' : realtimeMode ? 'Live speech-to-speech' : 'Synthetic narration'}{sample ? ' · Fictional reporting' : ''}</p>
+          <div className="session-controls" role="group" aria-label="Briefing controls">
+            <button type="button" className="playback-toggle" disabled={!active} aria-label={playbackLabel} title={playbackLabel} onClick={() => {
+              const audio = player.current
+              if (!audio) return
+              if (!audio.paused) audio.pause()
+              else void audio.play().catch(() => setStatus('Press play to listen.'))
+            }}><Icon name={speaker ? 'pause' : 'play'} /></button>
+            <button type="button" autoFocus onClick={onClose} className="room-close" aria-label={closeLabel} title={closeLabel}><Icon name="stop" /></button>
+          </div>
+        </header>
+        {begun && <div className="session-agenda">
+          <p className="agenda-label">{complete ? 'Agenda complete' : `Topic ${topic + 1} of ${stories.length}`}</p>
+          <ol className="agenda-timeline" aria-label="Topic checkpoints">
+            {stories.map((story, index) => <li key={story.id} aria-current={!complete && index === topic ? 'step' : undefined}
+              data-complete={complete || index < topic}>
+              <span className="checkpoint-dot" aria-hidden="true" />
+              <span className="sr-only">Topic {index + 1}: {story.title}. {complete || index < topic ? 'Completed' : index === topic ? 'In discussion' : 'Upcoming'}</span>
+            </li>)}
+          </ol>
+          <h2 className="session-headline">{stories[topic].title}</h2>
+        </div>}
+      </div>
+      <AgentStage audio={player} origin={origin} host={host} guests={guests} speaker={speaker}
+        onConfirm={phase !== 'playing' ? confirm : undefined} confirming={phase === 'confirming'}>
+        {phase !== 'playing' && <BriefingSetup minutes={minutes} experts={experts} disabled={phase === 'confirming'}
+          onMinutes={setMinutes} onExperts={value => { setExperts(value); setMode('panel') }} />}
+      </AgentStage>
       <div ref={consolePanel} className="session-console">
       <p role="status" className="player-status">{status}</p>
+      {phase === 'setup' && (canGenerateSample || !recorded) && <div className="briefing-setup-options">
+        {canGenerateSample && <label className="field">Playback
+          <select value={recorded ? 'sample' : 'live'} onChange={event => setRecorded(event.target.value === 'sample')}>
+            <option value="sample">Recorded sample</option><option value="live">Generate a personal briefing</option>
+          </select>
+        </label>}
+        {!recorded && <label className="field">Format
+          <select value={mode} onChange={event => setMode(event.target.value as Preferences['mode'])}>
+            <option value="panel">Expert panel</option><option value="presenter">Presenter</option>
+          </select>
+        </label>}
+      </div>}
+      {phase !== 'playing' && <p className="setup-note">{recorded ? 'Recorded preview · fixed audio and two experts. Dial settings apply to generated briefings.'
+        : mode === 'presenter' ? 'Presenter mode · host only. Adjust the lower arc to switch to an expert panel.'
+        : 'Drag the arcs to adjust. Tap the host to start.'}</p>}
       {saveError && <p role="alert">This browser could not save your briefing. Check the available device storage.</p>}
-      <audio ref={player} controls aria-label="Briefing audio" hidden={!active || liveShow || realtimeMode} className="w-full"
-        onPlaying={() => { const line = current.current; if (line) { setSpeaker(line.speaker); setStatus(''); save(line); introduce() } }}
-        onPause={() => setSpeaker('')} onTimeUpdate={introduce}
+      <audio ref={player} aria-label="Synthetic briefing audio" hidden
+        onPlaying={() => { const line = current.current; if (line) { setBegun(true); setSpeaker(line.speaker); setStatus(''); save(line); introduce() } }}
+        onPause={() => setSpeaker('')} onTimeUpdate={introduce} onSeeked={introduce}
         onError={() => { if (current.current) fail(new Error('This audio could not play. Close the session and try again.')) }} onEnded={() => {
       const heard = current.current
       if (recorded) { advanceSample(); return }
@@ -687,18 +825,15 @@ export function PanelPlayer({ owner, stories, preferences, plan, recorded, origi
       show(null)
       void next(finished.current)
     }} />
-    {active && <div className="playing-segment">
-      <article><p className="topic">{active.speaker}</p><p>{active.text}</p></article>
-      <Sources cards={active.sources} />
-    </div>}
+    {facts.length > 0 && <Sources key={active?.id + ':' + facts[0].claim} cards={facts} compact />}
     {liveWith && <button type="button" className="button" onClick={() => void finishLive()}>Back to the briefing</button>}
-    {realtimeMode && running && <button type="button" className="button talk-button"
+    {phase === 'playing' && realtimeMode && running && <button type="button" className="button talk-button"
       onPointerDown={event => { event.currentTarget.setPointerCapture(event.pointerId); holdToTalk(true) }}
       onPointerUp={() => holdToTalk(false)} onPointerCancel={() => holdToTalk(false)}
       onKeyDown={event => { if ((event.key === ' ' || event.key === 'Enter') && !event.repeat) { event.preventDefault(); holdToTalk(true) } }}
       onKeyUp={event => { if (event.key === ' ' || event.key === 'Enter') { event.preventDefault(); holdToTalk(false) } }}>
       Hold to talk</button>}
-    {running && !recorded && <form className="flex flex-wrap gap-2" onSubmit={e => {
+    {phase === 'playing' && running && !recorded && <form className="flex flex-wrap gap-2" onSubmit={e => {
       e.preventDefault()
       const showing = showSession.current
       if (rt.current?.host && question.trim()) listenerAsks(question.trim())  // the host answers out loud

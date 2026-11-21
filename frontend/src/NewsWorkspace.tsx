@@ -1,14 +1,17 @@
 import { lazy, Suspense, useEffect, useRef, useState } from 'react'
+import type { PointerEvent as ReactPointerEvent } from 'react'
 import { AudioRibbon, Brand, Icon } from './Brand'
 import { Briefings } from './BriefingHistory'
 import { Orb } from './Orb'
-import { loadSettings, Profile } from './Profile'
+import { listenerChoicesKey, loadListenerChoices, loadSettings, Profile } from './Profile'
+import type { ListenerChoices } from './Profile'
 import { sampleHeadlines } from './briefings'
-import type { DiscussionPlan, Headline, Preferences, PreparedBriefing } from './briefings'
+import type { Headline, Preferences } from './briefings'
 
 const loadPlayer = () => import('./PanelPlayer').then(module => ({ default: module.PanelPlayer }))
 const PanelPlayer = lazy(loadPlayer)
 const defaultProfile = 'Explain what changed and why it matters to a general news listener.'
+const swipeTravel = 16
 
 type Listener = { id: string; name: string; minutes: number | null }
 type ArticleLookup = Record<string, { headline: string; publication: string; language: string }>
@@ -33,39 +36,47 @@ async function lookupHeadlines(ids: string[], signal?: AbortSignal): Promise<Hea
   })
 }
 
-export function NewsWorkspace({ owner, listenerId }: { owner: string; listenerId?: string }) {
+export function NewsWorkspace({ owner, onboarding, listenerId }: { owner: string; onboarding?: unknown; listenerId?: string }) {
   const demo = owner === 'demo'
-  const [view, setView] = useState<'feed' | 'briefings' | 'profile'>('feed')
-  const [stories, setStories] = useState<Headline[]>([])
   const [demoListeners, setDemoListeners] = useState<Listener[] | null>(null)
   const [demoListener, setDemoListener] = useState('')
   const [feedError, setFeedError] = useState('')
-  const [preparing, setPreparing] = useState(false)
+  const [view, setView] = useState<'feed' | 'briefings' | 'profile'>('feed')
+  const [stories, setStories] = useState<Headline[]>([])
   const [sample, setSample] = useState(true)
   const [historyVersion, setHistoryVersion] = useState(0)
   const [online, setOnline] = useState(false)
   const [savedSettings] = useState(() => loadSettings(owner))
   const [recorded, setRecorded] = useState(savedSettings?.recorded ?? true)
-  const [preferences, setPreferences] = useState<Preferences>(savedSettings?.preferences ?? { profile: defaultProfile, mode: 'panel', minutes: 4 })
-  const [picks, setPicks] = useState<Record<string, boolean>>({})
+  const [choices, setChoices] = useState(() => loadListenerChoices(owner, onboarding))
+  const [storageError, setStorageError] = useState(false)
+  const interests = [...choices.topics, choices.otherInterests.trim()].filter(Boolean)
+  const preferences: Preferences = {
+    profile: interests.length ? `Explain what changed and why it matters to a listener interested in ${interests.join(', ')}.` : savedSettings?.preferences.profile ?? defaultProfile,
+    mode: savedSettings?.preferences.mode ?? 'panel',
+    minutes: savedSettings?.preferences.minutes ?? 4,
+  }
+  const [selectedIds, setSelectedIds] = useState<string[]>([])
+  const [revealedId, setRevealedId] = useState<string | null>(null)
   const [notice, setNotice] = useState('')
+  const [agentNotice, setAgentNotice] = useState('')
   const [question, setQuestion] = useState('')
   const [search, setSearch] = useState<{ query: string; status: 'loading' | 'done' | 'error'; message?: string } | null>(null)
-  const [launch, setLaunch] = useState<{ x: number; y: number; context: AudioContext | null; prepared?: PreparedBriefing; lineup?: Headline[] } | null>(null)
-  const [briefingError, setBriefingError] = useState('')
-  const trigger = useRef<HTMLButtonElement>(null)
-  const drag = useRef<{ id: number; x: number; y: number } | null>(null)
+  const [launch, setLaunch] = useState<{ x: number; y: number; context: AudioContext | null; lineup: Headline[]
+    listener?: { id: string; articleIds: string[]; selectedIds: string[] } } | null>(null)
   const feed = useRef<Headline[]>([])
   const searchRequest = useRef<AbortController | null>(null)
   const userId = listenerId || demoListener
   const waitingForCatalog = demo && demoListeners === null
-  const selected = Object.keys(picks).filter(id => picks[id]).map(id => stories.find(s => s.id === id)!).filter(Boolean)
+  const trigger = useRef<HTMLButtonElement>(null)
+  const agentControl = useRef<HTMLDivElement>(null)
+  const swipe = useRef<{ pointerId: number; x: number; y: number; content: HTMLElement; open: boolean; animate: boolean } | null>(null)
+  const selected = selectedIds.map(id => stories.find(story => story.id === id)).filter(story => story !== undefined)
 
   useEffect(() => {
     if (!demo) return
     const controller = new AbortController()
-    void requestJson<{ users: Listener[] }>('/api/recommend/catalog',
-      AbortSignal.any([controller.signal, AbortSignal.timeout(5000)]))
+    void requestJson<{ users: Listener[] }>('/api/recommend/catalog', AbortSignal.any([controller.signal, AbortSignal.timeout(5000)]))
       .then(({ users }) => {
         setDemoListeners(users)
         setDemoListener(current => users.some(user => user.id === current) ? current : users[0]?.id ?? '')
@@ -74,6 +85,7 @@ export function NewsWorkspace({ owner, listenerId }: { owner: string; listenerId
     return () => controller.abort()
   }, [demo])
 
+  // A signed-in (or demo) listener gets articles ranked for them; otherwise the shared story catalog.
   useEffect(() => {
     if (waitingForCatalog) return
     const controller = new AbortController()
@@ -81,7 +93,7 @@ export function NewsWorkspace({ owner, listenerId }: { owner: string; listenerId
     feed.current = []
     searchRequest.current?.abort()
     setSearch(null)
-    setPicks({})
+    setSelectedIds([])
     setOnline(false)
     setFeedError('')
     async function load() {
@@ -108,40 +120,19 @@ export function NewsWorkspace({ owner, listenerId }: { owner: string; listenerId
         setOnline(true)
       } catch (error) {
         if (controller.signal.aborted) return
-        if (userId) {
-          setFeedError(error instanceof Error ? error.message : 'Recommendations could not be loaded.')
-        } else {
-          feed.current = sampleHeadlines
-          setStories(sampleHeadlines)
-          setSample(true)
-          setRecorded(true)
-        }
+        if (userId) setFeedError(error instanceof Error ? error.message : 'Recommendations could not be loaded.')
+        else { feed.current = sampleHeadlines; setStories(sampleHeadlines); setSample(true); setRecorded(true) }
       }
     }
     void load()
     return () => controller.abort()
   }, [userId, waitingForCatalog])
 
-  useEffect(() => {
-    if (!demo || !new URLSearchParams(location.search).has('briefing')) return
-    window.history.replaceState(null, '', location.pathname)
-    try {
-      const stored = sessionStorage.getItem('tio-briefing-plan')
-      sessionStorage.removeItem('tio-briefing-plan')
-      const prepared = stored ? JSON.parse(stored) as PreparedBriefing : null
-      if (!prepared?.stories.length) throw new Error()
-      if (prepared.listenerId) setDemoListener(prepared.listenerId)
-      setLaunch({ x: window.innerWidth / 2, y: window.innerHeight / 2, context: null, prepared })
-    } catch {
-      setBriefingError('The prepared briefing is unavailable. Generate it again in the recommender lab.')
-    }
-  }, [demo])
-
-  // Keep the headlines already in the lineup visible, so a search never drops a pick.
+  // Keep picked headlines visible, so a search never drops a pick.
   function showWithPicks(results: Headline[]) {
     setStories(current => {
       const ids = new Set(results.map(story => story.id))
-      return [...current.filter(story => picks[story.id] && !ids.has(story.id)), ...results]
+      return [...current.filter(story => selectedIds.includes(story.id) && !ids.has(story.id)), ...results]
     })
   }
 
@@ -154,15 +145,11 @@ export function NewsWorkspace({ owner, listenerId }: { owner: string; listenerId
       let results: Headline[]
       if (userId) {
         const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(90_000)])
-        const found = await requestJson<{ article_ids: string[] }>('/api/recommend', signal,
-          { user_id: userId, focus: query, limit: 30 })
+        const found = await requestJson<{ article_ids: string[] }>('/api/recommend', signal, { user_id: userId, focus: query, limit: 30 })
         results = await lookupHeadlines(found.article_ids, signal)
       } else {
         const words = query.toLowerCase().split(/\s+/).filter(Boolean)
-        results = feed.current.filter(story => {
-          const text = `${story.title} ${story.topic} ${story.summary}`.toLowerCase()
-          return words.every(word => text.includes(word))
-        })
+        results = feed.current.filter(story => words.every(word => `${story.title} ${story.topic} ${story.summary}`.toLowerCase().includes(word)))
       }
       if (controller.signal.aborted) return
       showWithPicks(results)
@@ -180,91 +167,129 @@ export function NewsWorkspace({ owner, listenerId }: { owner: string; listenerId
     showWithPicks(feed.current)
   }
 
-  function choose(story: Headline, include: boolean) {
-    if (include && !picks[story.id] && selected.length >= 6) {
-      setNotice('Your lineup holds six headlines. Remove one before adding another.')
+  useEffect(() => {
+    if (!agentNotice) return
+    function dismissOutside(event: PointerEvent) {
+      if (!agentControl.current?.contains(event.target as Node)) setAgentNotice('')
+    }
+    function dismissEscape(event: KeyboardEvent) {
+      if (event.key === 'Escape') setAgentNotice('')
+    }
+    document.addEventListener('pointerdown', dismissOutside)
+    document.addEventListener('keydown', dismissEscape)
+    return () => {
+      document.removeEventListener('pointerdown', dismissOutside)
+      document.removeEventListener('keydown', dismissEscape)
+    }
+  }, [agentNotice])
+
+  function toggleStory(story: Headline) {
+    const picked = selectedIds.includes(story.id)
+    if (!picked && selectedIds.length >= 6) {
+      const message = 'Your lineup holds six headlines. Remove one before adding another.'
+      setNotice(message)
+      setAgentNotice(message)
       return
     }
-    setPicks(previous => ({ ...previous, [story.id]: include }))
-    setNotice((include ? 'Included ' : 'Skipped ') + story.title)
+    setRevealedId(null)
+    setAgentNotice('')
+    setSelectedIds(previous => picked ? previous.filter(id => id !== story.id) : [...previous, story.id])
+    setNotice((picked ? 'Removed from briefing: ' : 'Added to briefing: ') + story.title)
   }
 
-  async function start() {
-    if (preparing) return
+  function startSwipe(event: ReactPointerEvent<HTMLElement>, open: boolean) {
+    if (!event.isPrimary || event.pointerType !== 'touch' || (event.target as Element).closest('button')) return
+    const content = event.currentTarget.querySelector<HTMLElement>('.story-content')!
+    swipe.current = {
+      pointerId: event.pointerId, x: event.clientX, y: event.clientY, content, open,
+      animate: !matchMedia('(prefers-reduced-motion: reduce)').matches,
+    }
+  }
+
+  function moveSwipe(event: ReactPointerEvent<HTMLElement>) {
+    const start = swipe.current
+    if (!start?.animate || event.pointerId !== start.pointerId) return
+    const dx = event.clientX - start.x
+    if (Math.abs(dx) < 8 || Math.abs(dx) < Math.abs(event.clientY - start.y)) return
+    const offset = dx + (start.open ? -swipeTravel : 0)
+    start.content.dataset.swiping = ''
+    start.content.style.translate = `${Math.max(-swipeTravel, Math.min(0, offset))}px`
+  }
+
+  function finishSwipe(event: ReactPointerEvent<HTMLElement>, storyId?: string) {
+    const start = swipe.current
+    if (!start || event.pointerId !== start.pointerId) return
+    swipe.current = null
+    delete start.content.dataset.swiping
+    start.content.style.removeProperty('translate')
+    const dx = event.clientX - start.x
+    if (storyId && Math.abs(dx) >= 32 && Math.abs(dx) > 1.5 * Math.abs(event.clientY - start.y)) {
+      if (dx < 0) setRevealedId(storyId)
+      else if (start.open) setRevealedId(null)
+    }
+  }
+
+  // Picks are optional: a listener's briefing is planned to fill the chosen minutes from their feed, and the shared
+  // catalog falls back to its top stories, one per two minutes.
+  function start() {
     if (!stories.length) {
-      setNotice(feedError ? 'The feed could not load, so there are no articles to discuss yet.' : 'The feed is still loading. Try again in a moment.')
+      const message = feedError ? 'The feed could not load, so there are no articles to discuss yet.' : 'The feed is still loading. Try again in a moment.'
+      setNotice(message)
+      setAgentNotice(message)
       return
     }
-    if (!recorded && ((!userId && !preferences.profile.trim()) || !Number.isInteger(preferences.minutes) || preferences.minutes < 1 || preferences.minutes > 15)) {
-      setView('profile')
-      setNotice('Check the listener profile and briefing length.')
-      requestAnimationFrame(() => document.querySelector<HTMLTextAreaElement>('.profile-settings textarea')?.focus())
-      return
-    }
-    // With no picks, the briefing fills itself: a listener's plan adds recommended articles up to the chosen length,
-    // and the standard feed takes its top stories, one story per two minutes like the panel does.
-    const lineup = selected.length ? selected
-      : stories.slice(0, Math.min(6, Math.max(1, Math.floor(preferences.minutes / 2))))
+    setAgentNotice('')
     const rect = trigger.current!.getBoundingClientRect()
-    const origin = { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2, context: null }
-    setBriefingError('')
-    if (userId) {
-      setPreparing(true)
-      setView('feed')
-      try {
-        const { segments, hosts, tones, profile } = await requestJson<DiscussionPlan & { profile: string }>('/api/briefing/generate',
-          undefined, {
-            user_id: userId, article_ids: stories.map(s => s.id), selected_article_ids: selected.map(s => s.id),
-            excluded_article_ids: Object.keys(picks).filter(id => !picks[id]),
-            minutes: preferences.minutes, mode: 'debate',  // the realtime panel branch always plans a host plus two guests
-          })
-        const ids = segments.map(segment => segment.article_ids[0])
-        if (!ids.length) throw new Error('No stories are available for this briefing.')
-        const headlines = new Map(stories.map(story => [story.id, story]))
-        for (const headline of await lookupHeadlines(ids.filter(id => !headlines.has(id)))) {
-          headlines.set(headline.id, headline)
-        }
-        const lineup = ids.map(id => headlines.get(id) ?? { id, title: id, topic: '', summary: '' })
-        setLaunch({ ...origin, prepared: {
-          stories: lineup, preferences: { ...preferences, profile },
-          plan: { segments, hosts, tones },
-        } })
-      } catch (error) {
-        setBriefingError(error instanceof Error ? error.message : 'The briefing could not be generated.')
-      } finally {
-        setPreparing(false)
-      }
-      return
-    }
     let context = null
     try { context = new AudioContext(); void context.resume().catch(() => {}) } catch { /* Native playback still works. */ }
-    setLaunch({ ...origin, context, lineup })
+    const lineup = selected.length ? selected : stories.slice(0, Math.min(6, Math.max(1, Math.floor(preferences.minutes / 2))))
+    setLaunch({ x: rect.x + rect.width / 2, y: rect.y + rect.height / 2, context,
+      lineup: userId ? selected : lineup,
+      listener: userId ? { id: userId, articleIds: stories.map(story => story.id), selectedIds } : undefined })
+  }
+
+  function saveChoices(next: ListenerChoices) {
+    setChoices(next)
+    try {
+      localStorage.setItem(listenerChoicesKey(owner), JSON.stringify(next))
+      setStorageError(false)
+    } catch { setStorageError(true) }
   }
 
   return <div className="workspace">
     <a className="skip-link" href="#workspace-content">Skip to content</a>
-    <header className={view === 'feed' ? 'masthead with-search' : 'masthead'}>
-      {view === 'feed' && <AudioRibbon />}
-      <div className="masthead-inner"><div className="brand-lockup"><Brand /><span className="publication">The Liquid Briefing</span></div></div>
-    </header>
+    {view === 'feed' && <header className="masthead with-search">
+      <AudioRibbon />
+      <div className="masthead-inner"><div className="brand-lockup"><Brand /></div></div>
+    </header>}
     {view === 'feed' && <div className="search-rail">
       <form className="article-search" role="search" aria-label="Article search" onSubmit={event => {
         event.preventDefault()
         const query = question.trim()
-        if (query.length < 2 || preparing) return
+        if (query.length < 2) return
         void runSearch(query)
         window.scrollTo(0, 0)
       }}>
         <Icon name="search" />
         <label htmlFor="article-question" className="sr-only">Search the articles</label>
         <input id="article-question" type="search" enterKeyHint="search" placeholder="Search the news…" value={question} maxLength={500} onChange={event => setQuestion(event.target.value)} />
-        <button type="submit" aria-label="Search" disabled={question.trim().length < 2 || preparing}><Icon name="arrow" /></button>
+        <button type="submit" aria-label="Search" disabled={question.trim().length < 2}><Icon name="arrow" /></button>
       </form>
     </div>}
     <div className="workspace-dock">
-      <button ref={trigger} type="button" className="agent-launch" aria-label="Start agent discussion" title="Start agent discussion" disabled={preparing} onFocus={() => void loadPlayer()} onPointerEnter={() => void loadPlayer()} onClick={start}>
+      <div ref={agentControl} className="agent-control" onPointerLeave={event => {
+        if (event.pointerType !== 'touch') setAgentNotice('')
+      }} onBlur={event => {
+        if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setAgentNotice('')
+      }}>
+      {agentNotice && <div id="agent-notice" className="agent-notice" role="tooltip">{agentNotice}</div>}
+      <button ref={trigger} type="button" className="agent-launch" aria-label="Start agent discussion"
+        aria-describedby={agentNotice ? 'agent-notice' : undefined}
+        onFocus={() => void loadPlayer()} onPointerEnter={() => void loadPlayer()} onClick={start}>
         <Orb />{selected.length > 0 && <small aria-hidden="true">{selected.length}</small>}
+        {agentNotice && <span className="agent-info" aria-hidden="true">i</span>}
       </button>
+      </div>
       <nav aria-label="Workspace" className="workspace-nav">
         {(['feed', 'briefings', 'profile'] as const).map(id => <button type="button" key={id} aria-current={view === id ? 'page' : undefined} onClick={() => { setView(id); window.scrollTo(0, 0) }}>
           <Icon name={id === 'feed' ? 'feed' : id === 'profile' ? 'profile' : 'discussion'} />{id === 'feed' ? 'News feed' : id === 'profile' ? 'Profile' : 'Briefings'}
@@ -272,80 +297,46 @@ export function NewsWorkspace({ owner, listenerId }: { owner: string; listenerId
       </nav>
     </div>
     <section id="workspace-content" tabIndex={-1} aria-label="News workspace" className="page-width">
-      {briefingError && <p className="selection-notice" role="alert">{briefingError}</p>}
-      {view === 'profile' ? <Profile preferences={preferences} recorded={recorded} sample={sample} online={online} onSave={settings => {
-        setPreferences(settings.preferences)
-        setRecorded(settings.recorded)
-        try {
-          localStorage.setItem('tio-profile-' + owner, JSON.stringify(settings))
-          return 'Preferences saved on this device.'
-        } catch { return 'Applied for this visit. Your browser could not save these preferences.' }
-      }} /> : view === 'briefings' ? <Briefings key={historyVersion} owner={owner} /> : <>
+      {view === 'profile' ? <Profile choices={choices} storageError={storageError} onChange={saveChoices} briefingOpen={!!launch} />
+        : view === 'briefings' ? <Briefings key={historyVersion} owner={owner} /> : <>
         {search && <div role="status" className="search-result"><strong>{search.query}</strong>
           <p>{search.status === 'loading' ? 'Searching the articles…' : search.message}</p>
           <button type="button" className="search-clear" onClick={() => { clearSearch(); setQuestion('') }}>Clear search</button>
         </div>}
-        <h1 className="sr-only">News feed</h1>
         {demoListeners && demoListeners.length > 0 && <div className="field max-w-md">
           <label htmlFor="demo-listener">Listener</label>
-          <select id="demo-listener" value={demoListener} disabled={preparing} onChange={event => {
-            const id = event.target.value
-            const minutes = demoListeners.find(listener => listener.id === id)?.minutes
-            if (minutes) setPreferences(previous => ({ ...previous, minutes: Math.min(minutes, 15) }))
-            setBriefingError('')
-            setDemoListener(id)
-          }}>
+          <select id="demo-listener" value={demoListener} onChange={event => setDemoListener(event.target.value)}>
             {demoListeners.map(listener => <option key={listener.id} value={listener.id}>{listener.name}</option>)}
             <option value="">Standard feed</option>
           </select>
         </div>}
-        {preparing && <p role="status">Generating your briefing…</p>}
-        <span role="status" className={notice.startsWith('Your lineup') || notice.startsWith('The feed') || notice.startsWith('Check') ? 'selection-notice' : 'sr-only'}>{notice}</span>
+        <h1 className="sr-only">News feed</h1>
+        <span role="status" className="sr-only">{notice}</span>
         <section aria-labelledby="stories-title">
           <div className="section-title"><h2 id="stories-title">{search ? 'Search results' : userId ? 'Recommended articles' : 'Top articles'}</h2></div>
+          <ul className="story-grid selectable-stories">{stories.map(story => {
+            const picked = selectedIds.includes(story.id)
+            const revealed = revealedId === story.id
+            return <li key={story.id}><article className="glass-card" data-selected={picked} data-swipe-open={revealed}
+              onPointerDown={event => startSwipe(event, revealed)} onPointerMove={moveSwipe}
+              onPointerUp={event => finishSwipe(event, story.id)} onPointerCancel={finishSwipe} onLostPointerCapture={finishSwipe}>
+              <button type="button" className="story-select" aria-label={`Select article: ${story.title}`} aria-pressed={picked} onClick={() => toggleStory(story)}>
+                <Icon name={picked ? 'check' : 'plus'} />
+              </button>
+              <div className="story-content">
+                {typeof story.thumb_url === 'string' && /^https?:\/\//i.test(story.thumb_url) &&
+                  <img className="story-photo" src={story.thumb_url} alt="" draggable={false} loading="lazy"
+                    referrerPolicy="no-referrer" onError={event => { event.currentTarget.hidden = true }} />}
+                <p className="topic">{story.topic}</p><h3>{story.title}</h3><p className="story-summary">{story.summary}</p>
+              </div>
+            </article></li>
+          })}</ul>
           {feedError && <p role="alert">{feedError}</p>}
-          <ul className="story-grid selectable-stories">{stories.map(story => <li key={story.id}>
-            <article data-choice={picks[story.id] === undefined ? undefined : picks[story.id] ? 'include' : 'skip'}
-              onPointerDown={e => {
-                if (preparing || !e.isPrimary || e.button !== 0 || (e.target as HTMLElement).closest('button')) return
-                drag.current = { id: e.pointerId, x: e.clientX, y: e.clientY }
-                e.currentTarget.setPointerCapture(e.pointerId)
-              }} onPointerMove={e => {
-                const from = drag.current
-                if (!from || from.id !== e.pointerId) return
-                const dx = e.clientX - from.x
-                if (Math.abs(dx) < 12 || Math.abs(e.clientY - from.y) > Math.abs(dx)) return
-                e.currentTarget.dataset.swipe = dx > 0 ? 'include' : 'skip'
-                if (!matchMedia('(prefers-reduced-motion: reduce)').matches) {
-                  const offset = Math.max(-32, Math.min(32, dx / 3))
-                  e.currentTarget.style.transform = `translateX(${offset}px) rotate(${offset / 24}deg)`
-                }
-              }} onLostPointerCapture={e => {
-                drag.current = null
-                delete e.currentTarget.dataset.swipe
-                e.currentTarget.style.removeProperty('transform')
-              }} onPointerUp={e => {
-                const start = drag.current
-                if (!start || start.id !== e.pointerId) return
-                drag.current = null
-                const dx = e.clientX - start.x
-                if (Math.abs(dx) >= 48 && Math.abs(dx) > 1.5 * Math.abs(e.clientY - start.y)) choose(story, dx > 0)
-              }}>
-              {typeof story.thumb_url === 'string' && /^https?:\/\//i.test(story.thumb_url) &&
-                <img className="story-photo" src={story.thumb_url} alt="" draggable={false} loading="lazy"
-                  referrerPolicy="no-referrer" onError={event => { event.currentTarget.hidden = true }} />}
-              <p className="topic">{story.topic}</p><h3>{story.title}</h3><p className="story-summary">{story.summary}</p>
-              <div className="story-vote"><button disabled={preparing} aria-pressed={picks[story.id] === false} onClick={() => choose(story, false)}>← {picks[story.id] === false ? 'Skipped' : 'Skip'}</button>
-              <button disabled={preparing} aria-pressed={picks[story.id] === true} onClick={() => choose(story, true)}>{picks[story.id] ? 'Included' : 'Include'} →</button></div>
-            </article></li>)}</ul>
-          {!stories.length && !feedError && <p role="status">{online ? 'No headlines are available.' : userId ? 'Loading recommendations…' : 'Loading headlines…'}</p>}
+          {!stories.length && !feedError && <p role="status">{online ? 'No indexed headlines are available.' : userId ? 'Loading recommendations…' : 'Loading headlines…'}</p>}
         </section>
       </>}
     </section>
-    {launch && <Suspense fallback={<p className="session-loading" role="status">Opening briefing…</p>}><PanelPlayer owner={owner}
-      stories={launch.prepared?.stories ?? launch.lineup ?? selected}
-      preferences={launch.prepared?.preferences ?? { ...preferences, profile: preferences.profile.trim() || defaultProfile }}
-      plan={launch.prepared?.plan} recorded={!launch.prepared && recorded} origin={launch} onClose={() => {
+    {launch && <Suspense fallback={<p className="session-loading" role="status">Opening briefing…</p>}><PanelPlayer owner={owner} stories={launch.lineup} listener={launch.listener} preferences={preferences} recorded={recorded} canGenerateSample={sample && online} origin={launch} onClose={() => {
       if (launch.context && launch.context.state !== 'closed') void launch.context.close().catch(() => {})
       setHistoryVersion(v => v + 1)
       setLaunch(null)

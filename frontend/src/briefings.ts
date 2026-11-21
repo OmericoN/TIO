@@ -3,7 +3,7 @@ import script from './recorded.json'
 
 export type Headline = { id: string; title: string; topic: string; summary: string; thumb_url?: string | null }
 export type Card = { id: string; publisher: string; language: string; url: string | null; quote: string; claim: string }
-export type Segment = { id: string; story: string; speaker: string; host: string; guests: string[]; text: string; sources: Card[]; audio?: string; audioUrl?: string }
+export type Segment = { id: string; story: string; story_id?: string; speaker: string; host: string; guests: string[]; text: string; sources: Card[]; audio?: string; audioUrl?: string }
 export type Entry = Segment | { id: string; speaker: 'Listener'; text: string }
 export type Briefing = { id: string; date: string; titles: string[]; entries: Entry[]; sample: boolean }
 // 'realtime' runs the panel as separate speech-to-speech agents (experimental).
@@ -39,7 +39,7 @@ export function recordedTurns(stories: Headline[]): Segment[] {
     const lines = script[source.id as keyof typeof script]
     const guests = [...new Set(lines.map(l => l.speaker).filter(s => s !== 'Main Host'))]
     return lines.map(line => ({
-      ...line, id: line.file, host: 'Main Host', guests, story: story.title, audioUrl: '/voices/' + line.file + '.wav',
+      ...line, id: line.file, host: 'Main Host', guests, story: story.title, story_id: story.id, audioUrl: '/voices/' + line.file + '.wav',
       sources: (claims[line.file] ?? []).map(([index, claim]) => {
         const a = source.articles[index]
         return { id: a.id, language: a.language, url: a.url, publisher: a.publisher, claim, quote: a.body }
@@ -50,6 +50,15 @@ export function recordedTurns(stories: Headline[]): Segment[] {
 
 export function audioUrl(segment: Segment) {
   return segment.audioUrl ?? 'data:audio/mpeg;base64,' + segment.audio
+}
+
+export function factChecksAt(segment: Segment, fraction: number): Card[] {
+  // shortcut: script position approximates speech timing, use word timestamps when TTS returns alignment.
+  const position = segment.text.length * Math.max(0, Math.min(1, fraction))
+  const cues = segment.sources.map(card => ({ card, at: segment.text.toLowerCase().indexOf(card.claim.toLowerCase()) }))
+    .filter(cue => cue.card.claim.trim() && cue.at >= 0 && cue.at <= position)
+  const latest = Math.max(-1, ...cues.map(cue => cue.at))
+  return cues.filter(cue => cue.at === latest).map(cue => cue.card)
 }
 
 // Separate databases keep demo and signed-in listeners' device histories independent.

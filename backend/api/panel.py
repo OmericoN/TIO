@@ -50,6 +50,7 @@ class Start(BaseModel):
     profile: str = Field(min_length=1, max_length=3000)
     mode: Literal["panel", "presenter"] = "panel"
     minutes: float = Field(default=4, ge=1, le=120)
+    expert_count: int = Field(default=2, ge=2, le=4, strict=True)
     ranked_guests: dict[str, list[UUID]] | None = None
     story_ids: list[str] | None = Field(default=None, min_length=1, max_length=6)
     match_result: CompletedMatch | None = None
@@ -149,20 +150,22 @@ def indexed_or_sample_panel(start):
     if host is None:
         raise ValueError("The persona catalog needs a main-host.")
     candidates = [i for i in personas if i != host]
+    if start.mode == "panel" and len(candidates) < start.expert_count:
+        raise ValueError(f"Only {len(candidates)} experts are available. Choose a smaller panel or use presenter mode.")
     guests = {}
     tones = {}
     for story in stories:
         if start.mode == "presenter":
             ids = []
         elif start.ranked_guests is not None:
-            ids = start.ranked_guests.get(story.id, [])[:2]
+            ids = start.ranked_guests.get(story.id, [])[:start.expert_count]
         elif INDEX.exists():
             news_ids = [a.id for a in story.articles if not a.official_release]
-            result = matcher().match_personas(news_ids, candidates, 2) if news_ids else {"agent_ids": [], "articles": []}
+            result = matcher().match_personas(news_ids, candidates, start.expert_count) if news_ids else {"agent_ids": [], "articles": []}
             ids = [UUID(i) for i in result["agent_ids"]]
             tones[story.id] = result["articles"]
         else:
-            ids = candidates[:2]
+            ids = candidates[:start.expert_count]
         if len(set(ids)) != len(ids) or any(i not in candidates for i in ids):
             raise ValueError("Invalid guest roster.")
         guests[story.id] = ids
@@ -173,17 +176,20 @@ def make_panel(start):
     load_dotenv(REPO_ROOT / ".env")
     result = start.match_result
     if start.test_shortlist:
-        article_ids, guest_ids, count = test_shortlist()
-        result = CompletedMatch.model_validate(matcher().match_personas(article_ids, guest_ids, count))
+        article_ids, guest_ids, _ = test_shortlist()
+        result = CompletedMatch.model_validate(matcher().match_personas(article_ids, guest_ids, start.expert_count))
     if start.briefing_plan is not None:
         panel = planned_panel(start.briefing_plan, start.profile, start.mode, start.minutes)
         stage = "session_evidence"
     elif result is not None:
-        panel = matched_panel(result, start.profile, start.mode, start.minutes, model())
+        panel = matched_panel(result, start.profile, start.mode, start.minutes, model(), start.expert_count)
         stage = "session_evidence"
     else:
         panel = indexed_or_sample_panel(start)
         stage = "event_evidence"
+    if (start.mode == "panel" and "expert_count" in start.model_fields_set
+            and any(len(roster) != start.expert_count for roster in panel.guests.values())):
+        raise InvalidMatch("There are not enough matched experts for this panel. Choose fewer experts.")
     for story in panel.stories:
         excerpts = passages(story, story.headline)
         rows = [{**a.model_dump(mode="json", exclude={"body"}),
@@ -385,7 +391,7 @@ def segment(panel, progress=None):
     token = uuid4()
     payload = {"id": token, "speaker": persona.name, "host": panel.personas[panel.host].name,
                "guests": [panel.personas[i].name for i in panel.roster], "story": panel.story.headline,
-               "text": spoken_text(turn.text), "sources": cards, "audio": audio}
+               "story_id": panel.story.id, "text": spoken_text(turn.text), "sources": cards, "audio": audio}
     return token, turn, cards, seconds, payload
 
 
@@ -574,7 +580,8 @@ def plan_turn(panel):
     token = uuid4()
     return token, brief, {"id": token, "speaker_id": str(speaker), "speaker": panel.personas[speaker].name,
                           "host": panel.personas[panel.host].name, "guests": [panel.personas[i].name for i in panel.roster],
-                          "story": panel.story.headline, "brief": realtime.render_brief(panel, brief),
+                          "story": panel.story.headline, "story_id": panel.story.id,
+                          "brief": realtime.render_brief(panel, brief),
                           "max_seconds": brief.max_seconds, "sources": sources}
 
 

@@ -24,6 +24,7 @@ class GenerateRequest(BaseModel):
                                             description="Articles the listener definitely wants; always kept.")
     minutes: float = Field(ge=1, le=120, description="Podcast length chosen by the listener.")
     mode: Literal["presenter", "debate"] = "presenter"
+    expert_count: int = Field(default=2, ge=1, le=4, description="Guests in a debate (the player's experts dial).")
     focus: str | None = Field(default=None, min_length=2, max_length=500,
                               description="The focus the list was made with, so added articles respect it.")
     days: int | None = Field(default=None, ge=1, le=365)
@@ -54,6 +55,7 @@ def generate_briefing(body: GenerateRequest, request: Request) -> GeneratePlan:
         with connect() as conn:
             return GeneratePlan(**generate(conn, str(body.user_id), body.article_ids, body.selected_article_ids,
                                            body.minutes, body.mode, body.focus, days=body.days,
+                                           expert_count=body.expert_count,
                                            excluded_article_ids=body.excluded_article_ids))
     except ProfileNotFound:
         raise HTTPException(status_code=404, detail="No profile with that user_id.") from None

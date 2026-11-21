@@ -128,9 +128,9 @@ def pick_hosts(conn, ranked: list[str], tones: dict[str, str], n: int, top_k: in
 
 def generate(conn, user_id: str, article_ids: list[str], selected_article_ids: list[str], minutes: float,
              mode: str = "presenter", focus: str | None = None, *,
-             days: int | None = None, excluded_article_ids: list[str] = ()) -> dict:
+             days: int | None = None, excluded_article_ids: list[str] = (), expert_count: int = 2) -> dict:
     listener = load_listener(conn, user_id)
-    n_hosts = 2 if mode == "debate" else 1
+    n_hosts = expert_count if mode == "debate" else 1
     selected = set(selected_article_ids)
     excluded = set(excluded_article_ids) - selected
     ids = list(dict.fromkeys([*selected_article_ids, *(i for i in article_ids if i not in excluded)]))
