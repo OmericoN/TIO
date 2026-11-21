@@ -19,7 +19,8 @@ export class RealtimeAgent {
   private channel!: RTCDataChannel
   private own = new Set<string>()           // responses this player asked for (turn briefs)
   private requesting = false
-  private turn: { resolve: (spoken: Spoken) => void; text: string; started: number; timer: number } | null = null
+  private turn: { resolve: (spoken: Spoken) => void; text: string; started: number; timer: number;
+    onText?: (text: string) => void } | null = null
   private replying = new Set<string>()
   readonly audio = new Audio()
 
@@ -59,7 +60,7 @@ export class RealtimeAgent {
         if (this.requesting) { this.own.add(id); this.requesting = false } else this.replying.add(id)
         break
       case 'response.output_audio_transcript.delta':
-        if (id && this.own.has(id) && this.turn) this.turn.text += event.delta ?? ''
+        if (id && this.own.has(id) && this.turn) { this.turn.text += event.delta ?? ''; this.turn.onText?.(this.turn.text) }
         break
       case 'response.output_audio_transcript.done':
         if (id && this.own.has(id) && this.turn) this.turn.text = event.transcript ?? this.turn.text
@@ -90,10 +91,10 @@ export class RealtimeAgent {
   }
 
   /** Speaks a turn brief in the agent's own words; resolves when its audio has finished playing or was cut off. */
-  speak(brief: string, maxSeconds: number): Promise<Spoken> {
+  speak(brief: string, maxSeconds: number, onText?: (text: string) => void): Promise<Spoken> {
     this.finish(true)
     return new Promise(resolve => {
-      this.turn = { resolve, text: '', started: performance.now(),
+      this.turn = { resolve, text: '', started: performance.now(), onText,
         timer: window.setTimeout(() => this.finish(false), (maxSeconds + 25) * 1000) }
       this.requesting = true
       this.send({ type: 'response.create', response: { instructions: brief } })

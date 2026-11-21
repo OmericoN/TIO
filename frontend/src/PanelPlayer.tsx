@@ -105,7 +105,10 @@ export function PanelPlayer({ owner, stories, preferences, plan, recorded, origi
   // Experimental live host: the whole briefing runs over one speech-to-speech session, fed fact cards by the backend.
   const liveShow = preferences.mode === 'live' && !recorded
   // Experimental realtime panel: a speech-to-speech agent per speaker, each speaking from briefs the backend plans.
-  const realtimeMode = preferences.mode === 'realtime' && !recorded
+  // On this experiment branch every generated briefing is live: panel and presenter formats both run as realtime
+  // agents (presenter = the host alone). Only the 'live' format keeps its single ElevenLabs session, and the
+  // recorded sample still plays its fixed audio.
+  const realtimeMode = !recorded && preferences.mode !== 'live'
   const rt = useRef<{ agents: Map<string, RealtimeAgent>; host?: RealtimeAgent; microphone: MediaStream | null;
     current?: RealtimeAgent; listening: boolean; exchange: { role: 'listener' | 'host'; text: string }[];
     quiet?: number; release?: () => void } | null>(null)
@@ -321,7 +324,7 @@ export function PanelPlayer({ owner, stories, preferences, plan, recorded, origi
     setStatus('Preparing your briefing…')
     try {
       const lineup = plan ? { briefing_plan: plan } : { story_ids: stories.map(s => s.id) }
-      const mode = preferences.mode === 'live' ? 'presenter' : preferences.mode === 'realtime' ? 'panel' : preferences.mode
+      const mode = preferences.mode === 'live' || preferences.mode === 'presenter' ? 'presenter' : 'panel'
       const result = await post<{ id: string; sample: boolean }>('', { ...preferences, mode, ...lineup })
       if (generation.current !== gen) {
         await fetch('/api/panel/' + result.id, { method: 'DELETE' })
@@ -386,7 +389,8 @@ export function PanelPlayer({ owner, stories, preferences, plan, recorded, origi
     connected.forEach(agent => state.agents.set(agent.info.id, agent))
     state.host = state.agents.get(hostInfo.id)
     setHost(hostInfo.name)
-    setStatus('')
+    const liveStatus = `Live · ${agents.length} realtime ${agents.length === 1 ? 'voice' : 'voices'}${microphone ? ' · just speak to join in' : ''}`
+    setStatus(liveStatus)
     const waitForListener = () => state.listening
       ? new Promise<void>(resolve => { state.release = resolve })
       : Promise.resolve()
@@ -400,6 +404,7 @@ export function PanelPlayer({ owner, stories, preferences, plan, recorded, origi
       if (turn.context) state.host?.context(turn.context)
       if (turn.done) { end(); setStatus('Briefing complete.'); return }
       await waitForListener()
+      setStatus(liveStatus)
       const agent = state.agents.get(turn.speaker_id)
       if (!agent) throw new Error(`No agent connected for ${turn.speaker}.`)
       story.title = turn.story
@@ -414,7 +419,8 @@ export function PanelPlayer({ owner, stories, preferences, plan, recorded, origi
         guests: turn.guests, text: '…', sources: turn.sources }
       setActive(line)
       state.current = agent
-      const said: Spoken = await agent.speak(turn.brief, turn.max_seconds)
+      // The transcript appears as the agent improvises it, word by word, rather than as a finished script.
+      const said: Spoken = await agent.speak(turn.brief, turn.max_seconds, text => setActive({ ...line, text }))
       state.current = undefined
       setSpeaker('')
       if (rt.current !== state) return
@@ -604,7 +610,7 @@ export function PanelPlayer({ owner, stories, preferences, plan, recorded, origi
     onCancel={e => { e.preventDefault(); onClose() }}>
     <div className="session-inner">
       <div className="session-intro"><header className="session-heading"><div><h1 id="room-title">Your briefing</h1>
-        <p>{recorded ? 'Recorded sample' : 'Synthetic narration'}{sample ? ' · Fictional reporting' : ''}</p></div>
+        <p>{recorded ? 'Recorded sample' : realtimeMode ? 'Live speech-to-speech' : 'Synthetic narration'}{sample ? ' · Fictional reporting' : ''}</p></div>
         <button autoFocus onClick={onClose} className="room-close">{running ? 'End session' : 'Close'}</button>
       </header><h2 className="session-headline">{active?.story ?? stories[0].title}</h2></div>
       <AgentStage audio={player} origin={origin} host={host} guests={guests} speaker={speaker} />
