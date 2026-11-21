@@ -49,10 +49,10 @@ DEFAULT_ARTICLES = 50       # articles returned (stories and their other-outlet 
                             # is chosen later, when the listener presses Generate (backend/briefing)
 RECENCY_DAYS = 7            # recency bonus falls from full (newest article) to 0 over this many days; with no
                             # time window, 0.10 over 7 days cut picks older than a week from 29 % to 1 %
-EXPLORATION = 0.01          # random noise added to each score before picking (Gumbel, this scale): the same listener
+EXPLORATION = 0.02          # random noise added to each score before picking (Gumbel, this scale): the same listener
                             # gets a different, still relevant, sample on each call. 0 = fully deterministic.
-                            # Measured on a real listener: two calls share ~48% of their top 10 (17% at 0.03), and
-                            # ~60% of the top 10 is the noise-free best list (35% at 0.03)
+                            # Measured on five real listeners (Nov 21): two calls share 48% of their top 10 (66% at
+                            # 0.01, 41% at 0.03), and 60% of a top 10 is the noise-free best list (74%, 47%)
 MMR_LAMBDA = 0.75           # 1 = relevance only, 0 = diversity only
 POOL = 150                  # best-scoring articles considered for coverage, MMR and siblings
 SAME_EVENT_MIN = 0.80       # two articles at least this close report the same event (any time apart, unless the

@@ -47,10 +47,17 @@ class PanelTest(unittest.TestCase):
             for count in (2, 3, 4):
                 result = api.make_panel(api.Start(profile="Listener", story_ids=[panel.story.id], minutes=7, expert_count=count))
                 self.assertEqual((result.minutes, len(result.roster)), (7, count))
+                self.assertEqual(result.language, "en")
                 self.assertNotIn(result.host, result.roster)
                 self.assertEqual(len(set(result.roster)), count)
             with self.assertRaises(ValidationError):
                 api.Start(profile="Listener", mode="presenter")
+            # The listener's language reaches the panel; one the voices aren't set up for falls back to English.
+            for code, kept in (("de", "de"), ("xx", "en")):
+                started = api.make_panel(api.Start(profile="Listener", story_ids=[panel.story.id], language=code))
+                self.assertEqual(started.language, kept)
+            with self.assertRaises(ValidationError):
+                api.Start(profile="Listener", language="Dutch")
             catalog.pop(persona.id)
             with self.assertRaisesRegex(ValueError, "Only 3 experts are available"):
                 api.make_panel(api.Start(profile="Listener", story_ids=[panel.story.id], expert_count=4))
@@ -712,6 +719,91 @@ class ShowStructureTest(unittest.TestCase):
         self.assertEqual((panel.personas[panel.speaker()].name, target), (second, None))
 
 
+class StoryIntroductionTest(unittest.TestCase):
+    def test_the_host_sets_each_story_up_before_the_discussion(self):
+        from discussion import realtime
+        panel = fixture()
+        _, direction = realtime.show_step(panel)
+        self.assertIn("what happened", direction)
+        self.assertIn("why it matters to this listener", direction)
+        self.assertIn("question the panel will dig into", direction)
+        self.assertIn("listener's guide", realtime.agent_instructions(panel, panel.host))
+        self.assertNotIn("listener's guide", realtime.agent_instructions(panel, panel.roster[0]))
+        self.assertIn("## Introducing a story (the host)", realtime.TURN_GUIDE)
+
+    def test_only_the_introduction_may_run_long(self):
+        from discussion import realtime
+        panel = fixture()
+        panel.story_budgets[panel.story.id] = 300
+        intro = realtime.TurnBrief(take="Is this the start of something?", goal="Set the story up",
+                                   points=["Why it matters to them", "What the panel will dig into"], facts=[],
+                                   card_ids=[], handoff=None, action="respond", max_seconds=45, visual=None)
+        with patch.object(realtime, "model") as provider, \
+                patch.object(realtime.visuals, "story_pictures", return_value={}):
+            provider.return_value.generate.return_value = intro
+            self.assertEqual(realtime.make_brief(panel).max_seconds, realtime.INTRO_SECONDS)
+            panel.heard(line("Welcome. Here's what happened.", handoff=panel.personas[panel.roster[0]].name), [], 25)
+            self.assertEqual(realtime.make_brief(panel).max_seconds, realtime.MAX_SECONDS)
+
+
+class AgendaTest(unittest.TestCase):
+    def test_every_speaker_knows_the_full_agenda_not_just_whats_left(self):
+        from discussion import realtime
+        panel = fixture()
+        extra = [panel.stories[1].model_copy(update={"id": f"extra-{n}", "headline": f"Oil falls 5% in week {n}"})
+                 for n in (3, 4)]
+        panel.stories = [*panel.stories, *extra]                      # new lists: the fixture's are shared
+        panel.guests = {**panel.guests, **{story.id: panel.guests[panel.stories[1].id] for story in extra}}
+        _, direction = realtime.show_step(panel)
+        self.assertIn("all 4 stories", direction)
+        self.assertIn("Oil falls in week", direction)                # the rundown leaves figures out
+        self.assertNotIn("5%", direction)
+        self.assertEqual(panel.agenda()["total_stories"], 4)
+        brief = realtime.TurnBrief(take="A view", goal="g", points=["p"], facts=[], card_ids=[], handoff=None,
+                                   action="respond", max_seconds=20, visual=None)
+        with patch.object(realtime, "model") as provider, \
+                patch.object(realtime.visuals, "story_pictures", return_value={}):
+            provider.return_value.generate.return_value = brief
+            realtime.make_brief(panel)
+        data = provider.return_value.generate.call_args.args[2]
+        self.assertEqual((data["story_number"], data["total_stories"], len(data["stories_left"])), (1, 4, 3))
+        self.assertIn("Story 1 of 4:", realtime.render_brief(panel, brief))
+
+    def test_the_panel_is_told_to_stay_fair(self):
+        from discussion import realtime
+        panel = fixture()
+        self.assertIn("## Fair to every side", realtime.TURN_GUIDE)
+        self.assertIn("You're neutral", realtime.agent_instructions(panel, panel.host))
+        self.assertIn("Be fair while you argue", realtime.agent_instructions(panel, panel.roster[0]))
+
+
+class FreshOpeningsTest(unittest.TestCase):
+    def test_each_turn_hears_how_recent_lines_began_and_which_fillers_are_spent(self):
+        from discussion import realtime
+        panel = fixture()
+        first = panel.personas[panel.roster[0]].name
+        panel.heard(line(f"Alright, so here's the story. {first}, what stands out?", handoff=first), [], 10)
+        panel.heard(line("Honestly, the growth looks thin to me."), [], 6)
+        openers, spent = panel.worn_openers()
+        self.assertEqual(openers, ["Alright, so", "Honestly, the"])
+        self.assertEqual(spent, ["alright"])
+        brief = realtime.TurnBrief(take="A view", goal="g", points=["p"], facts=[], card_ids=[], handoff=None,
+                                   action="respond", max_seconds=8, visual=None)
+        rendered = realtime.render_brief(panel, brief)
+        self.assertIn("The last lines on air began: Alright, so; Honestly, the", rendered)
+        self.assertIn("don't say it again: alright", rendered)
+
+    def test_the_prompts_no_longer_model_stock_fillers(self):
+        from discussion import realtime
+        panel = fixture()
+        for persona in (panel.host, panel.roster[0]):
+            instructions = realtime.agent_instructions(panel, persona)
+            self.assertNotIn("Okay but", instructions)
+            self.assertIn("stock filler", instructions)
+        panel.heard(line("Welcome.", handoff=panel.personas[panel.roster[0]].name), [], 5)
+        self.assertNotIn('"Okay', realtime.show_step(panel)[1])
+
+
 class RealtimeRoleTest(unittest.TestCase):
     def test_guests_are_told_they_are_not_the_host(self):
         from discussion import realtime
@@ -727,6 +819,25 @@ class RealtimeRoleTest(unittest.TestCase):
                                    max_seconds=12, visual=None)
         self.assertIn("You are a GUEST, not the host", realtime.render_brief(panel, brief))
 
+    def test_every_voice_speaks_the_listeners_language(self):
+        # Fact cards quote multilingual coverage and briefs are written in English, so every voice is told the
+        # listener's language in its standing instructions, in every turn brief, and in a live exchange.
+        from discussion import realtime
+        brief = realtime.TurnBrief(take="A view", goal="Open", points=["Growth"], card_ids=[], facts=[], handoff=None,
+                                   action="respond", max_seconds=12, visual=None)
+        for code, name in (("en", "English"), ("nl", "Dutch")):
+            with self.subTest(language=code):
+                panel = fixture()
+                panel.language = code
+                for speaker in (panel.host, panel.roster[0]):
+                    self.assertIn(f"Speak {name}, and only {name}", realtime.agent_instructions(panel, speaker))
+                self.assertIn(f"Speak {name} only", realtime.render_brief(panel, brief))
+                self.assertIn(f"Always speak {name}", panel.live_prompt())
+
+    def test_unknown_language_falls_back_to_english(self):
+        from discussion.panel import language_name
+        self.assertEqual(language_name("xx"), "English")
+        self.assertEqual(language_name("de"), "German")
 
 class SkipRequestTest(unittest.IsolatedAsyncioTestCase):
     def test_skip_requests_pick_the_next_or_the_named_story(self):

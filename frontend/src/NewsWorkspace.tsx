@@ -3,7 +3,8 @@ import type { PointerEvent as ReactPointerEvent } from 'react'
 import { AudioRibbon, Brand, Icon } from './Brand'
 import { Briefings } from './BriefingHistory'
 import { Orb } from './Orb'
-import { interestsFromProfile, interestsText } from './InterestFields'
+import { FeedLoading } from './FeedLoading'
+import { interestsFromProfile, interestsText, rankedTopics, shortTopic } from './InterestFields'
 import { listenerChoicesKey, loadListenerChoices, loadSettings, Profile } from './Profile'
 import type { ListenerChoices } from './Profile'
 import { sampleHeadlines } from './briefings'
@@ -12,7 +13,8 @@ import type { Headline, Preferences } from './briefings'
 const loadPlayer = () => import('./PanelPlayer').then(module => ({ default: module.PanelPlayer }))
 const PanelPlayer = lazy(loadPlayer)
 const defaultProfile = 'Explain what changed and why it matters to a general news listener.'
-const swipeTravel = 16
+const swipeTravel = 24     // how far the text follows the finger, in px: it stays inside the card's padding
+const swipeThreshold = 44  // a horizontal swipe this long adds (left) or removes (right) the story
 
 type ArticleLookup = Record<string, { headline: string; publication: string; language: string; thumb_url?: string | null }>
 
@@ -49,6 +51,9 @@ export function NewsWorkspace({ owner, onboarding, listenerId: userId, email, ac
   const [online, setOnline] = useState(false)
   const [savedSettings] = useState(() => loadSettings(owner))
   const [recorded, setRecorded] = useState(savedSettings?.recorded ?? true)
+  // The language the briefing's voices speak: the account's preferred language once it loads, else the browser's.
+  const [accountLanguage, setAccountLanguage] = useState<string | null>(null)
+  const language = accountLanguage ?? (navigator.language || 'en').slice(0, 2).toLowerCase()
   const [choices, setChoices] = useState(() => loadListenerChoices(owner, onboarding))
   const [storageError, setStorageError] = useState(false)
   const [syncNotice, setSyncNotice] = useState('')
@@ -58,7 +63,6 @@ export function NewsWorkspace({ owner, onboarding, listenerId: userId, email, ac
     minutes: savedSettings?.preferences.minutes ?? 4,
   }
   const [selectedIds, setSelectedIds] = useState<string[]>([])
-  const [revealedId, setRevealedId] = useState<string | null>(null)
   const [notice, setNotice] = useState('')
   const [agentNotice, setAgentNotice] = useState('')
   const [question, setQuestion] = useState('')
@@ -69,7 +73,8 @@ export function NewsWorkspace({ owner, onboarding, listenerId: userId, email, ac
   const searchRequest = useRef<AbortController | null>(null)
   const trigger = useRef<HTMLButtonElement>(null)
   const agentControl = useRef<HTMLDivElement>(null)
-  const swipe = useRef<{ pointerId: number; x: number; y: number; content: HTMLElement; open: boolean; animate: boolean } | null>(null)
+  const swipe = useRef<{ pointerId: number; x: number; y: number; card: HTMLElement; content: HTMLElement; picked: boolean
+    animate: boolean } | null>(null)
   const selected = selectedIds.map(id => stories.find(story => story.id === id)).filter(story => story !== undefined)
   const choicesNow = useRef(choices)
   const selectedNow = useRef(selectedIds)
@@ -183,41 +188,51 @@ export function NewsWorkspace({ owner, onboarding, listenerId: userId, email, ac
       setAgentNotice(message)
       return
     }
-    setRevealedId(null)
     setAgentNotice('')
     setSelectedIds(previous => picked ? previous.filter(id => id !== story.id) : [...previous, story.id])
     setNotice((picked ? 'Removed from briefing: ' : 'Added to briefing: ') + story.title)
   }
 
-  function startSwipe(event: ReactPointerEvent<HTMLElement>, open: boolean) {
+  // On touchscreens a swipe left adds the story to the briefing and a swipe right on an added story takes it out.
+  // While the finger moves, the card follows it and the tab lights up once letting go would act.
+  function startSwipe(event: ReactPointerEvent<HTMLElement>, picked: boolean) {
     if (!event.isPrimary || event.pointerType !== 'touch' || (event.target as Element).closest('button')) return
-    const content = event.currentTarget.querySelector<HTMLElement>('.story-content')!
+    const card = event.currentTarget
     swipe.current = {
-      pointerId: event.pointerId, x: event.clientX, y: event.clientY, content, open,
+      pointerId: event.pointerId, x: event.clientX, y: event.clientY, card,
+      content: card.querySelector<HTMLElement>('.story-content')!, picked,
       animate: !matchMedia('(prefers-reduced-motion: reduce)').matches,
     }
   }
 
-  function moveSwipe(event: ReactPointerEvent<HTMLElement>) {
-    const start = swipe.current
-    if (!start?.animate || event.pointerId !== start.pointerId) return
+  // How far the swipe has gone in the direction that acts on this card (left to add, right to remove).
+  function swipeReach(start: NonNullable<typeof swipe.current>, event: ReactPointerEvent<HTMLElement>) {
     const dx = event.clientX - start.x
-    if (Math.abs(dx) < 8 || Math.abs(dx) < Math.abs(event.clientY - start.y)) return
-    const offset = dx + (start.open ? -swipeTravel : 0)
-    start.content.dataset.swiping = ''
-    start.content.style.translate = `${Math.max(-swipeTravel, Math.min(0, offset))}px`
+    if (Math.abs(dx) < 8 || Math.abs(dx) < 1.5 * Math.abs(event.clientY - start.y)) return 0
+    return start.picked ? Math.max(0, dx) : Math.max(0, -dx)
   }
 
-  function finishSwipe(event: ReactPointerEvent<HTMLElement>, storyId?: string) {
+  function moveSwipe(event: ReactPointerEvent<HTMLElement>) {
+    const start = swipe.current
+    if (!start || event.pointerId !== start.pointerId) return
+    const reach = swipeReach(start, event)
+    if (reach >= swipeThreshold) start.card.dataset.swipeArmed = start.picked ? 'remove' : 'add'
+    else delete start.card.dataset.swipeArmed
+    if (!start.animate || !reach) return
+    start.content.dataset.swiping = ''
+    start.content.style.translate = `${(start.picked ? 1 : -1) * Math.min(swipeTravel, reach / 2)}px`
+  }
+
+  function finishSwipe(event: ReactPointerEvent<HTMLElement>, story?: Headline) {
     const start = swipe.current
     if (!start || event.pointerId !== start.pointerId) return
     swipe.current = null
+    delete start.card.dataset.swipeArmed
     delete start.content.dataset.swiping
     start.content.style.removeProperty('translate')
-    const dx = event.clientX - start.x
-    if (storyId && Math.abs(dx) >= 32 && Math.abs(dx) > 1.5 * Math.abs(event.clientY - start.y)) {
-      if (dx < 0) setRevealedId(storyId)
-      else if (start.open) setRevealedId(null)
+    if (story && event.type === 'pointerup' && swipeReach(start, event) >= swipeThreshold) {
+      toggleStory(story)
+      navigator.vibrate?.(10)
     }
   }
 
@@ -289,6 +304,7 @@ export function NewsWorkspace({ owner, onboarding, listenerId: userId, email, ac
         signal: AbortSignal.any([controller.signal, AbortSignal.timeout(10_000)]) }) : null)
       .then(response => response?.ok ? response.json() : null)
       .then(saved => {
+        if (saved && !controller.signal.aborted && typeof saved.preferred_language === 'string') setAccountLanguage(saved.preferred_language)
         if (!saved || controller.signal.aborted || interestsEdited.current) return
         const fromAccount = interestsFromProfile(saved.levels, saved.interests_text)
         if (Object.keys(fromAccount.levels).length || fromAccount.otherInterests) storeChoices({ ...choicesNow.current, ...fromAccount })
@@ -386,10 +402,9 @@ export function NewsWorkspace({ owner, onboarding, listenerId: userId, email, ac
           <div className="section-title"><h2 id="stories-title">{search ? 'Search results' : userId ? 'Recommended articles' : 'Top articles'}</h2></div>
           <ul className="story-grid selectable-stories">{stories.map(story => {
             const picked = selectedIds.includes(story.id)
-            const revealed = revealedId === story.id
-            return <li key={story.id}><article className="glass-card" data-selected={picked} data-swipe-open={revealed}
-              onPointerDown={event => startSwipe(event, revealed)} onPointerMove={moveSwipe}
-              onPointerUp={event => finishSwipe(event, story.id)} onPointerCancel={finishSwipe} onLostPointerCapture={finishSwipe}>
+            return <li key={story.id}><article className="glass-card" data-selected={picked}
+              onPointerDown={event => startSwipe(event, picked)} onPointerMove={moveSwipe}
+              onPointerUp={event => finishSwipe(event, story)} onPointerCancel={finishSwipe} onLostPointerCapture={finishSwipe}>
               <button type="button" className="story-select" aria-label={`Select article: ${story.title}`} aria-pressed={picked} onClick={() => toggleStory(story)}>
                 <Icon name={picked ? 'check' : 'plus'} />
               </button>
@@ -405,11 +420,14 @@ export function NewsWorkspace({ owner, onboarding, listenerId: userId, email, ac
             </article></li>
           })}</ul>
           {feedError && <p role="alert">{feedError}</p>}
-          {!stories.length && !feedError && <p role="status">{online ? 'No indexed headlines are available.' : userId ? 'Loading recommendations…' : 'Loading headlines…'}</p>}
+          {!stories.length && !feedError && (online ? <p role="status">No indexed headlines are available.</p>
+            : userId ? <FeedLoading title="Finding articles for you" slowNote="Still ranking today's coverage. This can take up to a minute."
+                interests={[...rankedTopics(choices.levels).map(shortTopic), ...choices.otherInterests.split(',').map(part => part.trim()).filter(Boolean)].slice(0, 6)} />
+            : <FeedLoading title="Loading top headlines" interests={[]} />)}
         </section>
       </>}
     </section>
-    {launch && <Suspense fallback={<p className="session-loading" role="status">Opening briefing…</p>}><PanelPlayer owner={owner} stories={launch.lineup} listener={launch.listener} preferences={preferences} recorded={recorded} origin={launch} onClose={() => {
+    {launch && <Suspense fallback={<p className="session-loading" role="status">Opening briefing…</p>}><PanelPlayer owner={owner} stories={launch.lineup} listener={launch.listener} preferences={preferences} language={language} recorded={recorded} origin={launch} onClose={() => {
       if (launch.context && launch.context.state !== 'closed') void launch.context.close().catch(() => {})
       setHistoryVersion(v => v + 1)
       setLaunch(null)

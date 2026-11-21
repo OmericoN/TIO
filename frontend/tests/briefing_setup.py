@@ -67,17 +67,23 @@ with sync_playwright() as p:
         select_article = page.get_by_role('button', name='Select article: A briefing topic')
         if width == 320:
             card = page.locator('.selectable-stories article')
-            expect(card).to_have_attribute('data-swipe-open', 'false')
             rect = card.bounding_box()
             x, y = rect['x'] + rect['width'] / 2, rect['y'] + rect['height'] / 2
             touch = page.context.new_cdp_session(page)
-            touch.send('Input.dispatchTouchEvent', {'type': 'touchStart', 'touchPoints': [{'x': x, 'y': y}]})
-            touch.send('Input.dispatchTouchEvent', {'type': 'touchMove', 'touchPoints': [{'x': x - 60, 'y': y}]})
-            touch.send('Input.dispatchTouchEvent', {'type': 'touchEnd', 'touchPoints': []})
-            expect(card).to_have_attribute('data-swipe-open', 'true')
+
+            def swipe(dx):
+                touch.send('Input.dispatchTouchEvent', {'type': 'touchStart', 'touchPoints': [{'x': x, 'y': y}]})
+                touch.send('Input.dispatchTouchEvent', {'type': 'touchMove', 'touchPoints': [{'x': x + dx, 'y': y}]})
+                touch.send('Input.dispatchTouchEvent', {'type': 'touchEnd', 'touchPoints': []})
+
+            swipe(-20)  # too short to act
             expect(select_article).to_have_attribute('aria-pressed', 'false')
+            swipe(-60)  # a swipe left adds the story
+            expect(select_article).to_have_attribute('aria-pressed', 'true')
+            swipe(60)   # a swipe right takes it back out
+            expect(select_article).to_have_attribute('aria-pressed', 'false')
+            expect(card).not_to_have_attribute('data-swipe-armed', 'add')
             select_article.tap()
-            expect(card).to_have_attribute('data-swipe-open', 'false')
         else:
             select_article.click()
         expect(select_article).to_have_attribute('aria-pressed', 'true')

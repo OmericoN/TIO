@@ -15,6 +15,7 @@ async function check(browser) {
     stories: [{ id: 'story', title: 'Quarterly growth', summary: 'Test coverage', topic: 'Economy' }] } }))
   await page.route('**/api/panel', route => {
     assert.equal(route.request().postDataJSON().mode, 'panel')
+    assert.equal(route.request().postDataJSON().language, process.env.TIO_TEST_LANGUAGE || 'en')  // the browser's, when signed out
     return route.fulfill({ json: { id: 'test', sample: false } })
   })
   await page.route('**/test/realtime/agents', route => route.fulfill({ json: { model: 'fixture', agents } }))

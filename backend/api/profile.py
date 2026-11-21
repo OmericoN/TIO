@@ -78,6 +78,7 @@ class InterestUpdate(BaseModel):
 class SavedInterests(BaseModel):
     levels: dict[str, int]
     interests_text: str | None
+    preferred_language: str | None = None  # the language the briefing's voices speak to this listener
 
 
 def interests_text(levels: dict[str, int], other: str) -> str | None:
@@ -90,17 +91,17 @@ def interests_text(levels: dict[str, int], other: str) -> str | None:
 
 @router.get("/interests")
 def read_interests(authorization: str | None = Header(default=None)) -> SavedInterests:
-    """The signed-in listener's saved interest radar and interest list."""
+    """The signed-in listener's saved interest radar and interest list, and the language they listen in."""
     user_id = signed_in_user_id(authorization)
     try:
         with connect() as conn:
-            row = conn.execute("select interest_levels, interests_text from public.profiles where id = %s",
-                               (user_id,)).fetchone()
+            row = conn.execute("select interest_levels, interests_text, preferred_language::text from public.profiles "
+                               "where id = %s", (user_id,)).fetchone()
     except (RuntimeError, psycopg.Error):
         raise HTTPException(status_code=503, detail="Saved interests are unavailable.") from None
     if row is None:
         raise HTTPException(status_code=404, detail="No profile for this account.")
-    return SavedInterests(levels=row[0] or {}, interests_text=row[1])
+    return SavedInterests(levels=row[0] or {}, interests_text=row[1], preferred_language=row[2])
 
 
 @router.put("/interests")

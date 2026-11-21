@@ -1,9 +1,9 @@
 // Citations shown while the panel talks: the articles behind the line being spoken, and every fact card the panel has
 // drawn on so far with the articles that support it, newest first. A line's facts are listed as soon as it starts,
 // and the ones the current line uses are highlighted.
-// The list takes whatever height the room has left and scrolls for the rest. Clicking a claim opens its article in a
-// new tab; a claim whose sources have no link opens the supporting passages instead.
-import { useEffect, useState } from 'react'
+// The list takes whatever height the room has left and scrolls a claim at a time for the rest. Clicking a claim opens
+// its article in a new tab; a claim whose sources have no link opens the supporting passages instead.
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { sampleArticle } from './briefings'
 import type { Card } from './briefings'
 
@@ -78,6 +78,8 @@ function SourceLink({ card }: { card: Card }) {
 // name, and the top row always says what the line being spoken cites.
 export function Citations({ speaking, cited, story }: { speaking: Card[]; cited: Card[]; story: string }) {
   const [claims, setClaims] = useState<{ story: string; cards: Card[] }[]>([])
+  const list = useRef<HTMLOListElement>(null)
+  const reading = useRef(false)
 
   useEffect(() => {
     setClaims(current => {
@@ -88,6 +90,13 @@ export function Citations({ speaking, cited, story }: { speaking: Card[]; cited:
         : current
     })
   }, [cited])
+
+  // The list snaps to whole claims, and on its own the browser would keep the snapped claim in view as newer ones
+  // arrive above it. That is right when the listener has scrolled down to read older claims, but otherwise the
+  // newest claim belongs on top.
+  useLayoutEffect(() => {
+    if (!reading.current) list.current?.scrollTo({ top: 0 })
+  }, [claims])
 
   const outlets = articles(speaking)
   const current = new Set(speaking.map(card => card.claim))
@@ -100,7 +109,8 @@ export function Citations({ speaking, cited, story }: { speaking: Card[]; cited:
         : <span className="citation-none">{claims.length ? 'This line cites no articles' : 'Articles appear here as the panel cites them'}</span>}
     </p>
     {claims.length === 0 && <p className="citation-none">Each fact the panel draws on is listed here, linked to its article.</p>}
-    {claims.length > 0 && <ol className="citation-list" aria-label="Fact checks">
+    {claims.length > 0 && <ol className="citation-list" aria-label="Fact checks" ref={list}
+      onScroll={event => { reading.current = event.currentTarget.scrollTop > 4 }}>
       {claims.map(({ story: from, cards }, index) => {
         const article = claimArticle(cards)
         return <li key={cards[0].claim} data-current={current.has(cards[0].claim) || undefined}>

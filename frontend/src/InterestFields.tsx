@@ -20,6 +20,9 @@ const topics: RadarTopic[] = [
 
 export const interestOptions = topics.map(topic => topic.name)
 
+/** A radar topic's short name ('Central banks and inflation' -> 'Inflation'); anything else comes back unchanged. */
+export const shortTopic = (name: string) => topics.find(topic => topic.name === name)?.short ?? name
+
 /** Known topics with a whole level from 1 to 3, in the radar's order. */
 export function readLevels(value: unknown): InterestLevels {
   const levels: InterestLevels = {}

@@ -6,6 +6,8 @@ import { Icon } from './Brand'
 import { BriefingSetup } from './BriefingSetup'
 import { TalkDeck } from './TalkDeck'
 import { Citations } from './Citations'
+import { LoadingScene } from './LoadingScene'
+import type { PrepStep } from './LoadingScene'
 import { audioUrl, factChecksAt, historyStore, recordedTurns } from './briefings'
 import { RealtimeAgent } from './realtime'
 import { VisualStack, visualKey } from './Visual'
@@ -78,6 +80,8 @@ type Props = {
   origin: { x: number; y: number; context: AudioContext | null }
   // A signed-in listener: the briefing is planned from their recommended feed and picks once they confirm.
   listener?: { id: string; articleIds: string[]; selectedIds: string[] }
+  // ISO 639-1 code of the language every voice speaks to this listener.
+  language: string
   onClose: () => void
 }
 
@@ -88,7 +92,7 @@ async function postJson<T>(url: string, body: object): Promise<T> {
   return response.json()
 }
 
-export function PanelPlayer({ owner, stories: chosenStories, preferences, recorded, origin, listener, onClose }: Props) {
+export function PanelPlayer({ owner, stories: chosenStories, preferences, language, recorded, origin, listener, onClose }: Props) {
   // The agenda: the chosen headlines, replaced by the planned lineup for a signed-in listener.
   const [stories, setStories] = useState<Headline[]>(chosenStories.length ? chosenStories
     : [{ id: 'planning', title: 'Your briefing', topic: '', summary: '' }])
@@ -97,6 +101,7 @@ export function PanelPlayer({ owner, stories: chosenStories, preferences, record
   const [phase, setPhase] = useState<'setup' | 'confirming' | 'playing'>('setup')
   const [minutes, setMinutes] = useState(preferences.minutes)
   const [experts, setExperts] = useState(2)
+  const [prep, setPrep] = useState('facts')  // the preparation step the loading checklist shows as in progress
   const confirmed = useRef(false)
   const [active, setActive] = useState<Segment | null>(null)
   const [begun, setBegun] = useState(false)
@@ -440,6 +445,7 @@ export function PanelPlayer({ owner, stories: chosenStories, preferences, record
       return
     }
     setStatus('Preparing your selected headlines…')
+    setPrep(listener ? 'plan' : 'facts')
     try {
       // A signed-in listener's briefing is planned now, from their feed, picks, and the minutes and experts just
       // chosen; otherwise the panel discusses the selected headlines.
@@ -453,8 +459,9 @@ export function PanelPlayer({ owner, stories: chosenStories, preferences, record
         setStories(agenda)
         record.titles = agenda.map(story => story.title)
         lineup = { briefing_plan: plan, expert_count: experts }
+        setPrep('facts')
       }
-      const result = await post<{ id: string; sample: boolean }>('', { ...preferences, mode: 'panel', minutes, ...lineup })
+      const result = await post<{ id: string; sample: boolean }>('', { ...preferences, mode: 'panel', minutes, language, ...lineup })
       if (generation.current !== gen) {
         await fetch('/api/panel/' + result.id, { method: 'DELETE' })
         return
@@ -483,6 +490,7 @@ export function PanelPlayer({ owner, stories: chosenStories, preferences, record
   async function startRealtime(gen: number, agenda: Headline[]) {
     const id = session.current
     setStatus('Connecting the panel…')
+    setPrep('voices')
     const { model, agents } = await post<{ model: string; agents: AgentInfo[] }>(`/${id}/realtime/agents`)
     let microphone: MediaStream | null = null
     try { microphone = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } }) }
@@ -513,6 +521,7 @@ export function PanelPlayer({ owner, stories: chosenStories, preferences, record
     if (rt.current !== state) { connected.forEach(agent => agent.close()); return }
     connected.forEach(agent => state.agents.set(agent.info.id, agent))
     state.host = state.agents.get(hostInfo.id)
+    setPrep('opening')
     setTalkMic(microphone)
     setHost(hostInfo.name)
     console.info('Realtime panel voices', Object.fromEntries(agents.map(a => [a.name, a.voice])))
@@ -698,6 +707,15 @@ export function PanelPlayer({ owner, stories: chosenStories, preferences, record
   const closeLabel = phase === 'playing' && running ? 'Stop briefing' : 'Close briefing'
   const playbackLabel = speaker ? 'Pause briefing' : 'Play briefing'
   const loading = phase !== 'setup' && !begun && running
+  const storyCount = stories.filter(story => story.id !== 'planning').length
+  const prepSteps: PrepStep[] = [
+    ...(listener ? [{ key: 'plan', label: 'Picking stories from your feed' }] : []),
+    { key: 'facts', label: 'Checking the facts and casting the experts', detail: [
+      storyCount ? `${storyCount} ${storyCount === 1 ? 'story' : 'stories'}` : '', `${experts} ${experts === 1 ? 'expert' : 'experts'}`,
+    ].filter(Boolean).join(' · ') },
+    { key: 'voices', label: 'Giving the panel their voices' },
+    { key: 'opening', label: 'Planning the opening' },
+  ]
 
   return <dialog ref={dialog} className="session-glass" data-setup={phase !== 'playing' || loading} aria-labelledby="room-title"
     style={{ '--launch-x': origin.x + 'px', '--launch-y': origin.y + 'px' } as CSSProperties}
@@ -735,6 +753,7 @@ export function PanelPlayer({ owner, stories: chosenStories, preferences, record
         onConfirm={phase !== 'playing' ? confirm : undefined} confirming={phase === 'confirming'}>
         {phase !== 'playing' && <BriefingSetup minutes={minutes} experts={experts} disabled={phase === 'confirming'}
           onMinutes={setMinutes} onExperts={setExperts} />}
+        {loading && !recorded && <LoadingScene stories={stories} steps={prepSteps} current={prep} />}
       </AgentStage>
       {begun && <h2 className="session-headline">{stories[topic].title}</h2>}
       <div ref={consolePanel} className="session-console">

@@ -23,7 +23,7 @@ from fastapi.responses import StreamingResponse
 from psycopg.rows import dict_row
 from pydantic import BaseModel, Field, ValidationError, model_validator
 
-from discussion.panel import SKIP_REQUEST, EvidenceReview, Panel, Turn, model, passages, review_event, select_stories, source_set, spoken_text
+from discussion.panel import LANGUAGES, SKIP_REQUEST, EvidenceReview, Panel, Turn, model, passages, review_event, select_stories, source_set, spoken_text
 from discussion.agents import DiscussionLine
 from voice.elevenlabs import request_session
 from discussion import realtime, visuals
@@ -56,6 +56,8 @@ class Start(BaseModel):
     match_result: CompletedMatch | None = None
     test_shortlist: bool = False
     briefing_plan: DiscussionPlan | None = None
+    # The listener's language (ISO 639-1): every voice speaks it. Unsupported codes fall back to English.
+    language: str = Field(default="en", pattern=r"^[a-z]{2}$")
 
     @model_validator(mode="after")
     def one_guest_source(self):
@@ -185,6 +187,7 @@ def make_panel(start):
     else:
         panel = indexed_or_sample_panel(start)
         stage = "event_evidence"
+    panel.language = start.language if start.language in LANGUAGES else "en"
     if any(not roster for roster in panel.guests.values()):
         raise InvalidMatch("A panel needs at least one matched guest expert per story.")
     if ("expert_count" in start.model_fields_set

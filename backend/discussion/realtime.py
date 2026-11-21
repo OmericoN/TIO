@@ -19,7 +19,7 @@ from pydantic import Field
 import logging
 
 from discussion import visuals
-from discussion.panel import TURN_GUIDE, Turn, content_words, figures_supported, model, values
+from discussion.panel import TURN_GUIDE, Turn, content_words, figures_supported, language_name, model, values
 
 log = logging.getLogger(__name__)
 from research.matcher import REPO_ROOT, StructuredOutput
@@ -33,7 +33,8 @@ PERSONA_STYLE = os.getenv("PANEL_PERSONA_STYLE", "extreme").strip().lower()
 EXTREME_PERFORMANCE = """# Performance: turn it all the way up
 This is a show, and you are a vivid character, not a neutral newsreader. Play your persona at full intensity:
 - Accent: make your accent strong and unmistakable in every sentence: its vowels, rhythm, intonation and stress.
-  Keep it authentic and respectful. Never use broken English, fake grammar mistakes, slurs or cultural jokes.
+  Keep it authentic and respectful. Never use broken grammar, fake mistakes, slurs or cultural jokes.
+  It is an accent on the language you speak, never a switch to another language.
 - Personality: push every trait in your persona to the extreme. Warm becomes beaming; dry becomes bone-dry;
   curious becomes delighted; measured becomes slow and deliberate. Let it colour every line.
 - Speech patterns: lean into them. Use your habits often and audibly, with your own pauses, fillers and emphasis.
@@ -44,16 +45,19 @@ This is a show, and you are a vivid character, not a neutral newsreader. Play yo
 # A conversation, not a round of statements: short turns, so a story has many of them before the host closes it.
 EXCHANGES = 10
 MIN_SECONDS, MAX_SECONDS = 4, 20
+INTRO_SECONDS = 30  # the host's story introduction (and the show's welcome) may run longer than any other turn
 HOST_VOICE = "marin"
 GUEST_VOICES = ["cedar", "coral", "ash", "sage", "verse", "ballad", "shimmer", "echo", "alloy"]
 
 
 class TurnBrief(StructuredOutput):
     goal: str = Field(description="What this turn must achieve, in one sentence.")
-    take: str = Field(description="The speaker's own opinion for this turn, in one punchy sentence they'll argue "
-                                  "for (a guest's verdict, or the host's provocation). Opinion, not new facts.")
-    points: list[str] = Field(description="One point to make (two at most), as a plain note, not a script. No figures, "
-                                          "names or dates that aren't in facts.")
+    take: str = Field(description="The speaker's own reading for this turn, in one punchy sentence: a guest's "
+                                  "verdict on what the evidence means, or the host's neutral challenge to the "
+                                  "strongest claim. Opinion, not new facts.")
+    points: list[str] = Field(description="One point to make (two at most; three for the host's story introduction), "
+                                          "as a plain note, not a script. No figures, names or dates that aren't in "
+                                          "facts.")
     facts: list[str] = Field(description="Zero or one factual sentence (two at most) this turn states, each restating one fact "
                                          "card's point with its exact figures, names and dates. Empty for pure "
                                          "conversation.")
@@ -61,7 +65,7 @@ class TurnBrief(StructuredOutput):
     handoff: str | None = Field(description="Exact name of the guest to hand over to at the end, or null.")
     action: Literal["respond", "clarify", "close"]
     max_seconds: int = Field(description="How long the spoken line should run: 4 to 12 seconds for most turns, "
-                                         "up to 20 for a story's opening.")
+                                         "20 to 30 for the host's story introduction.")
     visual: visuals.Visual | None = Field(description="What to show on screen while this line plays, or null.")
 
 
@@ -170,9 +174,16 @@ def agent_instructions(panel, persona_id, voice_direction=""):
     persona = panel.personas[persona_id]
     host = persona_id == panel.host
     host_name = panel.personas[panel.host].name
+    language = language_name(panel.language)
     role = (f"""# Your role: HOST
 You are the host and moderator. You open the show, introduce the guests and each story, ask the guests questions,
-probe disagreements, close each story and sign off.""" if host else f"""# Your role: GUEST EXPERT
+probe disagreements, close each story and sign off.
+When your brief says you're opening the show or a new story, you're the listener's guide: they haven't read the
+news. Set the story up before anyone argues about it: what happened, in plain words, the one fact that matters
+most, and why it matters to them. Then put the question the panel will dig into to the guest. That turn may run
+longer than your usual one or two sentences; every other turn stays short.
+You're neutral: you press whichever side is winning the argument, ask for the evidence behind strong claims, and
+never give your own verdict on a contested question.""" if host else f"""# Your role: GUEST EXPERT
 {host_name} is the host. You are a guest: you answer the questions you're asked, give your expert view and react to
 the other guests. You never welcome the listener, introduce yourself, the guests or a story, move the show to the
 next story, wrap a story up, thank people for listening or sign off; that is {host_name}'s job. You don't say
@@ -181,6 +192,13 @@ only your speaking style, not your role here.""")
     return f"""You are {persona.name}, {"the host" if host else "a guest expert"} on Tío, a live audio news panel for
 one listener. You are speaking out loud. The show's name is the Spanish word for "uncle", said "TEE-oh": always
 say it as that word, never spell it out as T-I-O.
+
+# Language
+The listener's language is {language}. Speak {language}, and only {language}, in every turn from the first word to
+the last. Your briefs are written in English, and fact cards, quotes and the listener may use other languages: put
+everything you say into {language}, keeping names, figures and outlet names as they are. Your accent is how you
+pronounce {language}; it never means switching language. Apart from names, "Tío" is the only word you say in
+another language.
 
 {role}
 
@@ -196,16 +214,22 @@ say it as that word, never spell it out as T-I-O.
   step instead, or keep the turn to a quick reaction.
 - The panel is only the people named in your briefs. Never invent other guests or stories.
 - This is a conversation between people who know each other, not a round of statements. Talk the way people
-  actually talk: short sentences, the odd fragment or half-finished thought, "I mean", "look", "yeah, but". One or
+  actually talk: short sentences, the odd fragment or half-finished thought, "I mean", "yeah, but", "hang on". One or
   two sentences is often the whole turn. Never deliver a prepared answer or tick through points.
-- Answer the last thing said first, the way you'd answer a friend: "Nah, that's not it", "Okay but why, though?",
-  "Right, and that's exactly the problem". Then make your one point, and stop. Leave something for the others.
+- Answer the last thing said first, the way you'd answer a friend: "Nah, that's not it", "But why, though?",
+  "And that's exactly the problem". Then make your one point, and stop. Leave something for the others.
+- Find your own way into every turn, in your persona's voice: start with the point or your reaction, never with a
+  stock filler like "Alright", "Okay", "So", "Right", "Well" or "Look". Say "alright" or "okay" at most once in the
+  whole show, and never start the way the last few lines did (your brief lists them).
 - Don't open with a name and don't use names in every turn; people rarely do. Don't end your turn on "what do you
   think?" or "what's your take?". Ask a question only when you really want the answer.
 - Use the brief as what's on your mind, in your own words. Keep within its time. Never read out the brief's labels
   and never mention the brief.
-- Have opinions. Take a clear side, say it plainly, and push back on the other speakers when you see it
-  differently. Don't agree to be polite, never say "great point", and don't summarise what they said: answer it.
+- Have opinions about what the evidence means. Take a clear side on that, say it plainly, and push back on the
+  other speakers when you see it differently. Don't agree to be polite, never say "great point", and don't
+  summarise what they said: answer it.
+- Be fair while you argue: give the other view its strongest form before you push back, use neutral words, no
+  cheerleading for any company, country or outlet, and never take a side on party politics or guess at motives.
 - Don't introduce yourself or say your own name.
 - You can't draw or show anything yourself. Charts, photos, maps and flow charts appear on the listener's screen
   by themselves and speak for themselves. Talk to the listener, not about the screen: mention a visual at most
@@ -224,8 +248,8 @@ say it as that word, never spell it out as T-I-O.
 def create_agent_secret(panel, persona_id, voice, voice_direction=""):
     """An ephemeral client secret for one browser-side realtime agent session."""
     audio = {"output": {"voice": voice}}
-    if persona_id == panel.host:  # only the host listens to the microphone
-        audio["input"] = {"transcription": {"model": "gpt-4o-mini-transcribe"},
+    if persona_id == panel.host:  # only the host listens to the microphone, in the listener's language
+        audio["input"] = {"transcription": {"model": "gpt-4o-mini-transcribe", "language": panel.language},
                           # Push-to-talk: no voice detection at all. The player opens the microphone only while the
                           # listener holds the talk button, then commits that audio for transcription.
                           "turn_detection": None}
@@ -245,6 +269,10 @@ def story_cards(panel):
     return [c for c in panel.fact_cards() if c["story"] == number]
 
 
+INTRODUCE = ("what happened, in plain words, with the one fact that matters most, and why it matters to this "
+             "listener. Set it up before anyone gives an opinion.")
+
+
 def show_step(panel):
     """The fixed shape of the show, decided by code rather than the model: who this turn addresses next and what the
     turn is for. Tio opens and introduces the panel, each guest answers in turn, Tio probes and closes each story,
@@ -259,13 +287,20 @@ def show_step(panel):
     if speaker == panel.host and panel.phase == "open":
         if panel.index == 0:
             guests = " and ".join(names) or "no guests today"
-            return target, (f"You're opening the show. In one sentence welcome the listener to Tío and say today's "
-                            f"guests are {guests}. Then set up the first story in a sentence or two and throw it "
-                            f"to {target} with a pointed question." if target else
-                            "You're opening the show: welcome the listener to Tío, then introduce the first story.")
-        return target, (f"Move to the next story in a sentence, like you would in conversation (\"Okay, different "
-                        f"thing.\"), say what happened, and throw it to {target} with a pointed question." if target else
-                        "Move to the next story with a one-sentence transition and present it.")
+            # The rundown names every story by count and topic; figures stay out (they'd be checked against the
+            # first story's reporting and flagged as slips).
+            topics = "; ".join(" ".join(re.sub(r"\S*\d\S*", "", s.headline).split()) for s in panel.stories)
+            coming = (f", and run through all {len(panel.stories)} stories on today's agenda in a few words each, with "
+                      f"no figures ({topics})" if len(panel.stories) > 1 else "")
+            return target, (f"You're opening the show. Welcome the listener to Tío in a sentence, say today's guests "
+                            f"are {guests}{coming}. Then introduce the first story: {INTRODUCE} Finish by putting the "
+                            f"question the panel will dig into to {target}." if target else
+                            f"You're opening the show: welcome the listener to Tío, then introduce the first story: "
+                            f"{INTRODUCE}")
+        return target, (f"Move to the next story with a quick bridge in your own words that links the two (\"From "
+                        f"chips to oil, then.\"), never \"Alright\" or \"Okay\", then introduce it: {INTRODUCE} "
+                        f"Finish by putting the question the panel will dig into to {target}." if target else
+                        f"Move to the next story with a quick transition, then introduce it: {INTRODUCE}")
     if speaker == panel.host and panel.phase == "clarify" and target:
         return target, f"Jump on a specific claim or disagreement you just heard, in a line, and put it to {target}."
     if speaker == panel.host and panel.phase == "resume" and target:
@@ -273,8 +308,9 @@ def show_step(panel):
     if speaker == panel.host:
         sign_off = (" This is the last story: after the takeaway, thank the guests and sign off warmly in one sentence."
                     if last_story else "")
-        return None, ("Wrap this story in a line or two, in your own voice: what you'd take from it, or what nobody "
-                      "settled. Don't recap who said what." + sign_off)
+        return None, ("Wrap this story in a line or two, in your own voice: what's settled and what's still open, "
+                      "fair to each side. Name a winner only when the evidence is clear. Don't recap who said what."
+                      + sign_off)
     if target:
         return target, (f"Reply to what was just said, from your angle: agree, push back or poke a hole in it. "
                         f"{target} talks next; you don't need to bring them in.")
@@ -292,6 +328,7 @@ def make_brief(panel):
         "speaker": persona.name, "role": "host" if speaker == panel.host else "guest",
         "phase": "answer" if panel.question else panel.phase, "headline": panel.story.headline,
         "first_story": panel.index == 0, "stories_left": [s.headline for s in panel.stories[panel.index + 1:]],
+        **panel.agenda(),
         "listener_preferences": panel.profile, "listener_style_requests": panel.listener_style,
         "recent_turns": [line.model_dump() for line in panel.history[-12:]],
         "already_said_this_briefing": panel.said[-40:],
@@ -312,6 +349,7 @@ def make_brief(panel):
         "listener_wants_visuals": panel.wants_visuals,
         "visual_expected": visuals.expected(panel, pictures),
         "correction": panel.correction or None,
+        "openers_heard": panel.worn_openers()[0], "fillers_already_said": panel.worn_openers()[1],
     }
     instructions = TURN_GUIDE + """
 
@@ -334,7 +372,10 @@ up to 12 for a point, up to 20 only for a story's opening.
 Plan for people talking, not taking turns at a microphone. A turn is usually one thought: a reaction, a jab, a
 question back, a short point. Most turns state no fact at all; a turn that answers the last speaker can be just
 their reaction and a reason. One point, not a list. The host doesn't sum up or recap; a closing is a quick line
-or two, in their own voice, that moves on.""" + "\n\n" + visuals.GUIDE
+or two, in their own voice, that moves on.
+The one exception is the host's story introduction (phase "open"): plan the setup that "Introducing a story"
+describes, with the story's key fact in facts and the context and the panel's question in points, so the listener
+knows what the story is before the back-and-forth starts.""" + "\n\n" + visuals.GUIDE
     target, direction = show_step(panel)
     next_phase, next_guest = panel.planned_floor()
     if next_guest:
@@ -344,10 +385,11 @@ or two, in their own voice, that moves on.""" + "\n\n" + visuals.GUIDE
 
 ## Staying accurate
 
-take is the speaker's own opinion for this turn, one punchy sentence: a guest's verdict on what the facts mean
-("Google's pop is noise; Broadcom is the real winner"), or the host's provocation ("Isn't this just hype?"). When the
-last speaker's take differs from this speaker's angle, the take disagrees with it. Never a fact the cards don't
-have, never bland ("it's complicated").
+take is the speaker's own reading for this turn, one punchy sentence: a guest's verdict on what the evidence means
+("Google's pop is noise; Broadcom is the real winner"), or the host's neutral challenge to the strongest claim
+("Isn't this just hype?"). When the last speaker's take differs from this speaker's angle, the take disagrees with
+it. Never a fact the cards don't have, never bland ("it's complicated"), never a side on party politics or a guess
+at motives, and never the host's own verdict on a contested question.
 facts are the factual sentences the speaker will state: each one restates a single fact card's point, keeping its
 figures, names and dates exactly. Use at most one (two for a story's opening), and only facts from unused_cards that aren't in recent_turns or already_said_this_briefing: a turn that reacts
 to the last speaker can have none. Points are conversational notes and carry no figures, names or dates of their own.
@@ -397,10 +439,11 @@ Set speaker_id to that candidate's ID and write this answer brief for that exper
     action = {"guest": "respond", "clarify": "clarify", "close": "close"}[next_phase]
     if panel.question:
         action = "respond"
+    introducing = speaker == panel.host and panel.phase == "open" and not panel.question
     return brief.model_copy(update={"action": action, "card_ids": [i for i in brief.card_ids if i in known],
                                     "handoff": target, "facts": facts, "points": points or [brief.goal],
-                                    "max_seconds": max(MIN_SECONDS, min(MAX_SECONDS, panel.turn_seconds(),
-                                                                        brief.max_seconds)),
+                                    "max_seconds": max(MIN_SECONDS, min(INTRO_SECONDS if introducing else MAX_SECONDS,
+                                                                        panel.turn_seconds(), brief.max_seconds)),
                                     "visual": visual})
 
 
@@ -454,11 +497,14 @@ def render_brief(panel, brief):
                  if brief.visual and brief.visual.kind != "picture" else "")
     phrase = panel.optional_phrase(speaker)
     habit = f"\nOptional verbal habit if it fits: {phrase}" if phrase else ""
+    openers, spent = panel.worn_openers()
+    fresh_start = (f"\nThe last lines on air began: {'; '.join(openers)}. Start yours differently." if openers else "") \
+        + (f"\nAlready said on this show, so don't say it again: {', '.join(spent)}." if spent else "")
     return f"""TURN BRIEF
 {role}{on_screen}
 Your perspective and delivery: {json.dumps(persona_cue(panel.personas[speaker]), ensure_ascii=False)}{habit}
-Vary these recent openings: {panel.openings.get(speaker, [])[-2:]}
-Story: {panel.story.headline}{heard}
+Vary these recent openings: {panel.openings.get(speaker, [])[-2:]}{fresh_start}
+Story {panel.index + 1} of {len(panel.stories)}: {panel.story.headline}{heard}
 Answer the actual words above through your own expertise. Drop any planned point that assumes a different question.
 Make ONE contribution in your field. Use your own reasoning and imagery. If the sources cannot answer the question,
 say which evidence your specialty would need. Skip figures and explanations the listener just heard.
@@ -473,7 +519,8 @@ Facts, only if you state any (keep every figure, name and date exactly as writte
 Fact cards you may use:
 {facts}{handoff}
 Talk like you're in the room with them, not presenting. At most {words} words, about {brief.max_seconds} seconds; shorter
-is fine."""
+is fine.
+Speak {language_name(panel.language)} only, even where this brief, the cards or the quotes are in another language."""
 
 
 def brief_turn(brief, text=None):
