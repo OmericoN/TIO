@@ -13,6 +13,7 @@ from fastapi import HTTPException
 
 from api import panel as api
 from discussion.costs import project
+from discussion.agents import DiscussionLine
 from discussion.panel import Citation, EvidenceReview, Finding, Panel, SpokenCitation, Turn, Verdict, evidence, passages, review_event, spoken_claim, spoken_text, figures_supported
 from discussion.personas import load_starter_personas
 from discussion.stories import Group, Groups, group_articles, load_index
@@ -120,20 +121,25 @@ class PanelTest(unittest.TestCase):
         host, guest = panel.host, panel.roster[0]
         for i in (host, guest):
             panel.personas[i] = panel.personas[i].model_copy(update={
-                "intro_template": "I'm here.", "outro_template": "Bye for now.", "catchphrases": ["Follow the money."]})
+                "intro_template": "I'm here.", "outro_template": "Bye for now.",
+                "catchphrases": ["A warm 'yeah' when acknowledging a guest"]})
         offered, notes = panel.signature_lines(guest)
-        self.assertEqual(offered, {"intro_template"})
-        self.assertIn("Do not recite it", notes)
-        panel.speaker_turns[guest] = 1
-        offered, notes = panel.signature_lines(guest)
-        self.assertEqual(offered, {"catchphrases"})                    # second turn: a reworded catchphrase may fit
-        self.assertIn("Do not say your name", notes)
+        self.assertEqual(offered, {"catchphrases"})                   # habits every turn, never an intro
+        self.assertIn("Do not introduce yourself", notes)
         self.assertEqual(panel.speaker(), host)
-        panel.heard(line("Hi, I'm Tio. Rates fell."), [], 1)
-        self.assertEqual((panel.speaker_turns[host], panel.openings[host]), (1, ["Hi, I'm Tio."]))
-        panel.speaker_turns[host] = 2
+        panel.heard(line("Hi there. Rates fell."), [], 1)
+        self.assertEqual((panel.speaker_turns[host], panel.openings[host]), (1, ["Hi there."]))
         panel.index, panel.phase = len(panel.stories) - 1, "close"
-        self.assertEqual(panel.signature_lines(host)[0], {"outro_template"})
+        self.assertEqual(panel.signature_lines(host)[0], {"catchphrases", "outro_template"})
+
+    def test_a_line_that_restates_an_earlier_one_is_redrafted(self):
+        panel = fixture()
+        said = "Revenue grew six percent this quarter, driven by stronger demand from industrial customers."
+        panel.history.append(DiscussionLine(speaker="Tio", text=said))
+        self.assertEqual(panel.repeated_line("So revenue grew six percent this quarter, driven by stronger "
+                                             "industrial customer demand."), said)
+        self.assertIsNone(panel.repeated_line("Margins are the bigger question: costs rose faster than prices "
+                                              "and the guidance stayed cautious."))
 
     def test_line_without_figures_plays_without_a_model_check(self):
         panel = fixture()

@@ -283,26 +283,29 @@ class Panel:
     openings: dict[UUID, list[str]] = field(default_factory=dict)  # each speaker's recent first sentences
 
     def signature_lines(self, speaker):
-        """Which signature lines this turn may draw on, and how. An intro only on a speaker's first turn, the outro
-        only when the host closes the last story, a catchphrase about every third turn; always reworded."""
-        turns = self.speaker_turns.get(speaker, 0)
+        """Which persona lines this turn may draw on, and how. Nobody introduces themselves. The catchphrases are
+        verbal habits ("a warm 'yeah' when acknowledging a guest"), offered every turn to colour delivery lightly.
+        The outro only when the host closes the last story."""
         persona = self.personas[speaker]
-        offered, notes = set(), []
-        if turns == 0 and persona.intro_template:
-            offered.add("intro_template")
-            notes.append("This is your first turn: introduce yourself in a few words, in the spirit of "
-                         "intro_template but in fresh wording that leads into this story. Do not recite it.")
-        else:
-            notes.append("You have already introduced yourself. Do not say your name or reintroduce yourself.")
+        offered = set()
+        notes = ["Do not introduce yourself or say your own name; the listener already knows who is speaking."]
+        if persona.catchphrases:
+            offered.add("catchphrases")
+            notes.append("catchphrases describe your verbal habits. Let one show lightly where it fits, such as a "
+                         "small word or a pause, never in every sentence. Never say the description itself.")
         if (speaker == self.host and self.phase == "close" and not self.question
                 and self.index == len(self.stories) - 1 and persona.outro_template):
             offered.add("outro_template")
             notes.append("This closes the briefing: sign off in the spirit of outro_template, in your own words.")
-        if turns % 3 == 1 and persona.catchphrases:
-            offered.add("catchphrases")
-            notes.append("If it fits naturally, you may work in the idea of one catchphrase, reworded to suit the "
-                         "point. Skip it when it would feel forced.")
         return frozenset(offered), "\n".join(notes)
+
+    def repeated_line(self, text):
+        """An earlier line of this story that the new one mostly restates, or None."""
+        words = content_words(spoken_text(text))
+        if len(words) < 8:
+            return None
+        return next((line.text for line in self.history if line.speaker != "Listener"
+                     and len(words & content_words(line.text)) >= 0.6 * len(words)), None)
 
     def fork(self):
         """An independent copy for speculative work: everything heard() mutates is copied; sources stay shared."""
@@ -375,7 +378,7 @@ class Panel:
 Vary your phrasing from earlier turns in recent_turns and your_previous_openings: do not reuse their
 openings, transitions or sign-offs.
 
-Write one short English segment about one point, at most 80 words. Introduce the panel only at the opening of the first
+Write one short English segment about one point, at most 80 words. Name the guests only at the opening of the first
 story. At subsequent openings transition straight to the next topic. Before closing a topic, give
 guests who have yet to speak a chance to respond to the previous point.
 In panel mode open by asking one rostered expert a focused question and naming them in handoff.
@@ -383,7 +386,9 @@ Use the evidence review to discuss shared facts and attribute differences. Cite 
 Presenter mode explains the story directly. Guest turns respond to the previous point. Give the next
 guest's exact name for a handoff. Use clarify to ask the moderator to probe a discrepancy and close
 when there is nothing new. The moderator's clarify turn questions an expert's specific claim.
-After a listener answer, a resume turn briefly reconnects to the interrupted story and invites
+Every turn makes a new point. Never repeat or paraphrase a line already in recent_turns, including your own.
+After a listener answer, a resume turn briefly reconnects to the interrupted story without restating what was
+already said, and invites
 the next expert. In answer mode the moderator may refer the listener's question to a named guest.
 In answer mode, answer the listener's question directly in your first sentence, in plain words, using any
 supplied passage (they may come from other stories in this briefing). Keep it brief and conversational,
@@ -417,6 +422,8 @@ Make it sound like a lively conversation between people, not an interview read a
             else:
                 voiced = turn
             try:
+                if repeats := self.repeated_line(turn.text):
+                    raise ValueError(f"This repeats an earlier line ({repeats[:80]}…). Make a new point instead.")
                 cards = evidence(turn, scope, sources)
                 if not values(turn.text):
                     return voiced, cards  # no figures to get wrong: conversation, framing or a question
