@@ -74,6 +74,9 @@ with sync_playwright() as p:
             def swipe(dx):
                 touch.send('Input.dispatchTouchEvent', {'type': 'touchStart', 'touchPoints': [{'x': x, 'y': y}]})
                 touch.send('Input.dispatchTouchEvent', {'type': 'touchMove', 'touchPoints': [{'x': x + dx, 'y': y}]})
+                # Hold still before lifting: an instant release starts a fling, and Chromium drops the next tap
+                # as the one that stops it.
+                page.wait_for_timeout(100)
                 touch.send('Input.dispatchTouchEvent', {'type': 'touchEnd', 'touchPoints': []})
 
             swipe(-20)  # too short to act
