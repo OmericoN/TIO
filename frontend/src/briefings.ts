@@ -7,12 +7,6 @@ export type Segment = { id: string; story: string; story_id?: string; speaker: s
 export type Entry = Segment | { id: string; speaker: 'Listener'; text: string }
 export type Briefing = { id: string; date: string; titles: string[]; entries: Entry[]; sample: boolean }
 export type Preferences = { profile: string; mode: 'panel' | 'presenter'; minutes: number }
-export type DiscussionPlan = {
-  segments: { article_ids: string[]; estimated_seconds: number }[]
-  hosts: string[]
-  tones: Record<string, string>
-}
-export type PreparedBriefing = { stories: Headline[]; preferences: Preferences; plan: DiscussionPlan; listenerId?: string }
 
 export function sampleArticle(id: string) {
   return fixtures.flatMap(story => story.articles).find(article => article.id === id)

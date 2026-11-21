@@ -6,16 +6,13 @@ import { Icon } from './Brand'
 import { BriefingSetup } from './BriefingSetup'
 import { Sources } from './BriefingHistory'
 import { audioUrl, factChecksAt, historyStore, recordedTurns } from './briefings'
-import type { Briefing, Card, DiscussionPlan, Entry, Headline, Preferences, Segment } from './briefings'
+import type { Briefing, Card, Entry, Headline, Preferences, Segment } from './briefings'
 
 async function post<T>(url: string, body = {}): Promise<T> {
   const response = await fetch('/api/panel' + url, {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
   })
-  if (!response.ok) {
-    const detail = (await response.json().catch(() => null))?.detail
-    throw new Error(typeof detail === 'string' ? detail : detail?.[0]?.msg || 'Panel unavailable. Check the backend connection.')
-  }
+  if (!response.ok) throw new Error((await response.json().catch(() => null))?.detail || 'Panel unavailable. Check the backend connection.')
   return response.json()
 }
 
@@ -46,13 +43,12 @@ type Props = {
   owner: string
   stories: Headline[]
   preferences: Preferences
-  plan?: DiscussionPlan
   recorded: boolean
   origin: { x: number; y: number; context: AudioContext | null }
   onClose: () => void
 }
 
-export function PanelPlayer({ owner, stories, preferences, plan, recorded, origin, onClose }: Props) {
+export function PanelPlayer({ owner, stories, preferences, recorded, origin, onClose }: Props) {
   const [running, setRunning] = useState(true)
   const [status, setStatus] = useState('')
   const [phase, setPhase] = useState<'setup' | 'confirming' | 'playing'>('setup')
@@ -257,13 +253,9 @@ export function PanelPlayer({ owner, stories, preferences, plan, recorded, origi
       advanceSample()
       return
     }
-    setStatus('Preparing your briefing…')
+    setStatus('Preparing your selected headlines…')
     try {
-      const adjustedPlan = plan && minutes !== preferences.minutes ? { ...plan, segments: plan.segments.map(segment => ({
-        ...segment, estimated_seconds: Math.max(1, Math.round(segment.estimated_seconds * minutes / preferences.minutes)),
-      })) } : plan
-      const lineup = adjustedPlan ? { briefing_plan: adjustedPlan } : { story_ids: stories.map(s => s.id) }
-      const result = await post<{ id: string; sample: boolean }>('', { ...preferences, mode, minutes, expert_count: experts, ...lineup })
+      const result = await post<{ id: string; sample: boolean }>('', { ...preferences, mode, minutes, expert_count: experts, story_ids: stories.map(s => s.id) })
       if (generation.current !== gen) {
         await fetch('/api/panel/' + result.id, { method: 'DELETE' })
         return

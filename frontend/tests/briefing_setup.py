@@ -43,7 +43,6 @@ with sync_playwright() as p:
         page.route('**/api/panel', start)
         page.route('**/api/panel/test/events', turn)
         page.route('**/api/panel/test', lambda r: r.fulfill(status=204))
-        page.route('**/api/recommend/catalog', lambda r: r.fulfill(json={'users': []}))
         page.goto('http://localhost:5173/demo')
         page.get_by_role('button', name='Include', exact=False).click()
         page.get_by_role('button', name='Start agent discussion').click()
@@ -127,7 +126,6 @@ with sync_playwright() as p:
             route.fulfill(status=503, json={'detail': 'Test endpoint reached'})
 
         page.route('**/api/panel', capture)
-        page.route('**/api/recommend/catalog', lambda r: r.fulfill(json={'users': []}))
         page.goto('http://localhost:5173/demo')
         expect(page.locator('.story-grid article')).to_have_count(2 if preview else 1)
         if not preview:
@@ -174,7 +172,6 @@ with sync_playwright() as p:
             route.fulfill(status=503, json={'detail': 'Test setup failure'})
 
         page.route('**/api/panel', rejected)
-        page.route('**/api/recommend/catalog', lambda r: r.fulfill(json={'users': []}))
         page.goto('http://localhost:5173/demo')
         page.get_by_role('button', name='Include', exact=False).click()
         page.get_by_role('button', name='Start agent discussion').click()
