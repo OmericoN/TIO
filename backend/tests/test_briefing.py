@@ -1,3 +1,4 @@
+import random
 import unittest
 from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock, Mock, patch
@@ -103,10 +104,22 @@ class HostTest(unittest.TestCase):
     def test_sensitive_tone_skips_jokey_hosts_in_listener_order(self) -> None:
         conn = self.conn({"joker": 5, "wry": 3, "calm": 1, "dry": 2})
         ranked = ["joker", "wry", "calm", "dry"]
-        self.assertEqual(pick_hosts(conn, ranked, {"a": "upbeat"}, 2), ["joker", "wry"])
-        self.assertEqual(pick_hosts(conn, ranked, {"a": "upbeat", "b": "serious"}, 2), ["wry", "calm"])
-        self.assertEqual(pick_hosts(conn, ranked, {"a": "serious", "b": "somber"}, 2), ["calm", "dry"])
-        self.assertEqual(pick_hosts(conn, ranked, {}, 1), ["joker"])
+        top = dict(top_k=2)  # a pool the size of the panel is deterministic
+        self.assertEqual(pick_hosts(conn, ranked, {"a": "upbeat"}, 2, **top), ["joker", "wry"])
+        self.assertEqual(pick_hosts(conn, ranked, {"a": "upbeat", "b": "serious"}, 2, **top), ["wry", "calm"])
+        self.assertEqual(pick_hosts(conn, ranked, {"a": "serious", "b": "somber"}, 2, **top), ["calm", "dry"])
+        self.assertEqual(pick_hosts(conn, ranked, {}, 1, top_k=1), ["joker"])
+
+    def test_hosts_vary_across_briefings_but_favour_the_top(self) -> None:
+        ranked = [f"p{i}" for i in range(10)]
+        conn = self.conn({i: 1 for i in ranked})
+        rng = random.Random(7)
+        panels = [tuple(pick_hosts(conn, ranked, {}, 2, rng=rng)) for _ in range(300)]
+        seen = {p for panel in panels for p in panel}
+        self.assertEqual(seen, set(ranked[:6]))                      # only the top six, and all of them come up
+        counts = {p: sum(p in panel for panel in panels) for p in seen}
+        self.assertGreater(counts["p0"], counts["p5"])
+        self.assertTrue(all(list(panel) == sorted(panel, key=ranked.index) for panel in panels))
 
     def test_tones_come_from_the_article_column(self) -> None:
         conn = MagicMock()

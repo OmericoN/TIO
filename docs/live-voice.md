@@ -50,3 +50,9 @@ $session = Invoke-RestMethod -Method Post -Uri http://127.0.0.1:8000/api/voice/s
 `True` confirms session setup for the [preview route](../backend/api/voice.py). The briefing player uses its own session and transcription routes.
 
 Keep the development servers bound to localhost. Add application authentication and a session rate limit before exposing token issuance through a public server or proxy.
+
+## Live interruptions in the briefing
+
+When a listener asks a question during a briefing, the player pauses the panel and opens a live speech-to-speech session with the host through the same ElevenLabs agent. `POST /api/panel/{id}/live` returns a conversation token, the host's voice ID and a system prompt with the listener's profile and style preferences, the current story, the last lines spoken, the story's reviewed facts and source passages, and the other stories' headlines. The listener talks freely; saying "carry on" (or a few quiet seconds, or **Back to the briefing**) ends the session. `POST /api/panel/{id}/live/end` folds the transcript into the panel, which picks the story back up.
+
+On the agent's **Security** tab, allow the **System prompt**, **First message** and **Voice** overrides and publish. If the session can't start, the player answers with a verified segment as before.

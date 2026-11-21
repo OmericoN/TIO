@@ -1,4 +1,4 @@
-import { CommitStrategy, useScribe } from '@elevenlabs/react'
+import { CommitStrategy, Conversation, useScribe } from '@elevenlabs/react'
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { CSSProperties } from 'react'
 import { AgentStage } from './AgentStage'
@@ -96,6 +96,10 @@ export function PanelPlayer({ owner, stories, preferences, plan, recorded, origi
   // The host's pre-voiced holding lines, loaded when the briefing starts and played while a question is answered.
   const holding = useRef<{ speaker: string; clips: { text: string; audio: string }[]; last: number }>({ speaker: '', clips: [], last: -1 })
   const holdingPlayback = useRef<{ audio: HTMLAudioElement; done: () => void } | null>(null)
+  // A live speech-to-speech conversation with the host while the briefing is paused for the listener.
+  const live = useRef<{ gen: number; transcript: { role: 'listener' | 'host'; text: string }[]; conversation?: Conversation;
+    idle?: number; finishing?: boolean; micWasOn: boolean } | null>(null)
+  const [liveWith, setLiveWith] = useState('')
 
   async function loadHolding(id: string) {
     try {
@@ -184,6 +188,7 @@ export function PanelPlayer({ owner, stories, preferences, plan, recorded, origi
 
   function end() {
     stopHolding()
+    if (live.current) { live.current.finishing = true; void live.current.conversation?.endSession().catch(() => {}); live.current = null; setLiveWith('') }
     generation.current++
     if (session.current) void fetch('/api/panel/' + session.current, { method: 'DELETE' }).catch(() => {})
     session.current = ''
@@ -233,6 +238,11 @@ export function PanelPlayer({ owner, stories, preferences, plan, recorded, origi
   async function ask(text: string) {
     if (!text.trim() || !session.current) return
     save({ id: crypto.randomUUID(), speaker: 'Listener', text: text.trim() })
+    if (live.current?.conversation) {  // already talking live: the typed question joins that conversation
+      live.current.transcript.push({ role: 'listener', text: text.trim() })
+      live.current.conversation.sendUserMessage(text.trim())
+      return
+    }
     interrupt()
     const gen = generation.current
     const thinking = playHolding()  // the host starts "thinking aloud" at once, while the answer is prepared
@@ -240,6 +250,7 @@ export function PanelPlayer({ owner, stories, preferences, plan, recorded, origi
       await pendingInterrupt.current
       if (generation.current !== gen) return
       pendingInterrupt.current = null
+      if (await startLive(text.trim(), gen)) return  // the host answers live; falls back to a verified segment
       await next({ question: text }, thinking)
     } catch (e) { if (generation.current === gen) fail(e) }
   }
@@ -303,6 +314,92 @@ export function PanelPlayer({ owner, stories, preferences, plan, recorded, origi
     } catch (e) { if (generation.current === gen) fail(e) }
   }
 
+  const BACK_TO_SHOW = /\b(carry on|go on|keep going|continue|resume|back to (the )?(briefing|show|panel|news)|that'?s all|that'?s it|thanks?( you)?)\b/i
+  const LIVE_IDLE_MS = 12000
+
+  function liveIdle(state: NonNullable<typeof live.current>) {
+    clearTimeout(state.idle)
+    state.idle = window.setTimeout(() => void finishLive(), LIVE_IDLE_MS)  // quiet after the answer: back to the show
+  }
+
+  // Hands the interruption to a live voice agent briefed on this listener and story. Returns false when live
+  // conversation isn't available, so the caller answers with a verified segment instead.
+  async function startLive(question: string, gen: number): Promise<boolean> {
+    const id = session.current
+    let briefing: { token: string; prompt: string; voice_id: string | null; speaker: string }
+    try { briefing = await post(`/${id}/live`) } catch { return false }
+    if (session.current !== id || generation.current !== gen) return true
+    const state: NonNullable<typeof live.current> = { gen, transcript: [{ role: 'listener', text: question }], micWasOn: scribe.isConnected }
+    live.current = state
+    scribe.disconnect()  // the live session takes over the microphone
+    try {
+      const conversation = await Conversation.startSession({
+        conversationToken: briefing.token, connectionType: 'webrtc',
+        overrides: { agent: { prompt: { prompt: briefing.prompt }, firstMessage: '' },
+          ...(briefing.voice_id ? { tts: { voiceId: briefing.voice_id } } : {}) },
+        onModeChange: ({ mode }) => {
+          if (live.current !== state) return
+          if (mode === 'speaking') { stopHolding(); setSpeaker(briefing.speaker); clearTimeout(state.idle) }
+          else { setSpeaker(''); liveIdle(state) }
+        },
+        onMessage: ({ message, source }) => {
+          if (live.current !== state || !message.trim()) return
+          const role = source === 'user' ? 'listener' : 'host'
+          if (role === 'listener' && state.transcript.at(-1)?.text === message.trim()) return
+          state.transcript.push({ role, text: message.trim() })
+          save(role === 'listener' ? { id: crypto.randomUUID(), speaker: 'Listener', text: message.trim() }
+            : { id: crypto.randomUUID(), story: previousStory.current, speaker: briefing.speaker, host: briefing.speaker,
+                guests: [], text: message.trim(), sources: [] })
+          if (role === 'listener') { clearTimeout(state.idle); if (BACK_TO_SHOW.test(message)) window.setTimeout(() => void finishLive(), 2500) }
+          else setStatus(`${briefing.speaker}: ${message.trim()}`)
+        },
+        onDisconnect: () => { if (live.current === state) void finishLive() },
+        onError: () => { if (live.current === state) void finishLive() },
+      })
+      if (live.current !== state) { void conversation.endSession().catch(() => {}); return true }
+      state.conversation = conversation
+      conversation.sendUserMessage(question)
+      setLiveWith(briefing.speaker)
+      setStatus(`Talking with ${briefing.speaker}. Say "carry on" when you're ready to go back.`)
+      return true
+    } catch {
+      if (live.current === state) live.current = null
+      if (state.micWasOn) void microphone()
+      return false
+    }
+  }
+
+  // Ends the live conversation, folds it into the panel and resumes the briefing where it stopped.
+  async function finishLive() {
+    const state = live.current
+    if (!state || state.finishing) return
+    state.finishing = true
+    clearTimeout(state.idle)
+    stopHolding()
+    void state.conversation?.endSession().catch(() => {})
+    setLiveWith('')
+    setSpeaker('')
+    const id = session.current
+    if (!state.transcript.some(line => line.role === 'host')) {
+      // The live session closed before the host said anything (e.g. the agent refused the overrides):
+      // answer the question with a verified segment instead, so it never goes unanswered.
+      if (live.current === state) live.current = null
+      if (!id || session.current !== id || generation.current !== state.gen) return
+      if (state.micWasOn) void microphone()
+      await next({ question: state.transcript[0].text })
+      return
+    }
+    try {
+      if (id && generation.current === state.gen) {
+        await post(`/${id}/live/end`, { generation: state.gen - sessionStart.current, transcript: state.transcript })
+      }
+    } catch (e) { if (generation.current === state.gen) { live.current = null; fail(e); return } }
+    if (live.current === state) live.current = null
+    if (!id || session.current !== id || generation.current !== state.gen) return
+    if (state.micWasOn) void microphone()
+    await next()
+  }
+
   async function microphone() {
     const id = session.current
     try {
@@ -342,6 +439,7 @@ export function PanelPlayer({ owner, stories, preferences, plan, recorded, origi
       <article><p className="topic">{active.speaker}</p><p>{active.text}</p></article>
       <Sources cards={active.sources} />
     </div>}
+    {liveWith && <button type="button" className="button" onClick={() => void finishLive()}>Back to the briefing</button>}
     {running && !recorded && <form className="flex flex-wrap gap-2" onSubmit={e => {
       e.preventDefault(); void ask(question); setQuestion('')
     }}>

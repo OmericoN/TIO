@@ -12,6 +12,7 @@
 """
 
 import logging
+import random
 
 import psycopg
 
@@ -27,6 +28,7 @@ logger = logging.getLogger(__name__)
 EXTEND_ROUNDS = 3
 EXTEND_BATCH = 30           # articles asked from the recommender per extension round
 # A host whose humor_level (1-5) is above this never presents a plan with a story in that tone: no jokes on a death.
+HOST_POOL = 6  # hosts are drawn from the listener's top this-many suitable personas
 MAX_HUMOR = {"somber": 2, "serious": 3, "cautious": 4}
 
 
@@ -105,12 +107,23 @@ def load_tones(conn, ids: list[str]) -> dict[str, str]:
     return {i: tone for i, tone in rows if tone in ARTICLE_TONES}
 
 
-def pick_hosts(conn, ranked: list[str], tones: dict[str, str], n: int) -> list[str]:
-    """The first n personas in the listener's order whose humor suits every tone in the plan."""
+def pick_hosts(conn, ranked: list[str], tones: dict[str, str], n: int, top_k: int = HOST_POOL,
+               rng: random.Random | None = None) -> list[str]:
+    """n personas whose humor suits every tone in the plan, drawn at random from the listener's top_k suitable ones.
+    Better-ranked personas are likelier (weight 1/rank), so favourites still come up most, but the panel varies
+    from one briefing to the next. Returned in ranking order."""
     limit = min((MAX_HUMOR.get(t, 5) for t in tones.values()), default=5)
     humor = dict(conn.execute("select id::text, humor_level from public.agent_personas where id = any(%s::uuid[])",
                               (ranked,)).fetchall()) if ranked else {}
-    return [i for i in ranked if (humor.get(i) or 1) <= limit][:n]
+    pool = [i for i in ranked if (humor.get(i) or 1) <= limit][:max(top_k, n)]
+    rng = rng or random.Random()
+    weights = {i: 1 / (rank + 1) for rank, i in enumerate(pool)}
+    chosen = []
+    while pool and len(chosen) < n:
+        pick = rng.choices(pool, [weights[i] for i in pool])[0]
+        chosen.append(pick)
+        pool.remove(pick)
+    return sorted(chosen, key=ranked.index)
 
 
 def generate(conn, user_id: str, article_ids: list[str], selected_article_ids: list[str], minutes: float,

@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
 from typing import Literal
+from urllib.error import URLError
 from urllib.parse import quote
 from urllib.request import Request as ProviderRequest, urlopen
 from uuid import UUID, uuid4
@@ -24,6 +25,7 @@ from pydantic import BaseModel, Field, ValidationError, model_validator
 
 from discussion.panel import Panel, Turn, model, passages, review_event, select_stories, source_set, spoken_text
 from discussion.agents import DiscussionLine
+from voice.elevenlabs import request_session
 from discussion.matched import CompletedMatch, DiscussionPlan, InvalidMatch, matched_panel, planned_panel, test_shortlist
 from discussion.personas import AgentPersona, load_starter_personas
 from discussion.stories import INDEX, available_stories
@@ -462,6 +464,45 @@ async def stream_turn(key: UUID, step: Step):
             await asyncio.gather(task, return_exceptions=True)
 
     return StreamingResponse(events(), media_type="application/x-ndjson", headers={"Cache-Control": "no-store"})
+
+
+class LiveLine(BaseModel):
+    role: Literal["listener", "host"]
+    text: str = Field(max_length=4000)
+
+
+class LiveEnd(BaseModel):
+    generation: int = Field(ge=0)
+    transcript: list[LiveLine] = Field(max_length=80)
+
+
+@router.post("/{key}/live")
+async def start_live(key: UUID):
+    """A live speech-to-speech session with the host for a listener interruption: an ElevenLabs agent token plus the
+    prompt and voice that make the agent this host, briefed on the listener and the current story."""
+    item = session(key)
+    api_key = os.getenv("ELEVENLABS_API_KEY", "").strip()
+    agent_id = os.getenv("ELEVENLABS_AGENT_ID", "").strip()
+    if not api_key or not agent_id:
+        raise HTTPException(503, "Live conversation needs ELEVENLABS_API_KEY and ELEVENLABS_AGENT_ID.")
+    try:
+        token = await run_in_threadpool(lambda: request_session(api_key=api_key, agent_id=agent_id))
+    except (URLError, TimeoutError, ValueError, OSError):
+        raise HTTPException(502, "ElevenLabs could not start a live session.") from None
+    host = item.panel.personas[item.panel.host]
+    return {"token": token.token, "prompt": item.panel.live_prompt(), "voice_id": host.voice_id,
+            "speaker": host.name}
+
+
+@router.post("/{key}/live/end")
+async def end_live(key: UUID, body: LiveEnd):
+    """Fold the live conversation into the panel so the next segment picks the story back up."""
+    item = session(key)
+    if item.busy or body.generation != item.generation:
+        raise HTTPException(409, "Live conversation superseded.")
+    item.panel.live_exchange([(line.role, line.text) for line in body.transcript])
+    item.prefetch = None
+    return {"generation": item.generation}
 
 
 @router.post("/{key}/microphone")

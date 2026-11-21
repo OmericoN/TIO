@@ -5,6 +5,7 @@ import os
 import threading
 import time
 import unittest
+from types import SimpleNamespace
 from pathlib import Path
 from unittest.mock import Mock, patch
 from uuid import uuid4
@@ -386,3 +387,39 @@ class HandoffTest(unittest.TestCase):
             panel.heard(line(text, handoff=handoff), [], 2)
             with self.subTest(handoff=handoff):
                 self.assertEqual(panel.next_guest, second)
+
+
+class LiveConversationTest(unittest.IsolatedAsyncioTestCase):
+    async def test_live_session_is_briefed_and_folded_back_into_the_panel(self):
+        key = uuid4()
+        item = api.Session(fixture())
+        item.touched = time.monotonic()
+        item.panel.listener_style = ["Explain terms in plain words."]
+        api.sessions[key] = item
+        self.addCleanup(api.sessions.pop, key, None)
+        token = SimpleNamespace(token="tok", conversation_id="c")
+        with patch.dict(os.environ, {"ELEVENLABS_API_KEY": "k", "ELEVENLABS_AGENT_ID": "a"}), \
+                patch.object(api, "request_session", return_value=token):
+            live = await api.start_live(key)
+        self.assertEqual((live["token"], live["speaker"]), ("tok", item.panel.personas[item.panel.host].name))
+        for expected in (item.panel.story.headline, item.panel.profile, "Explain terms in plain words.",
+                         "back to the panel"):
+            self.assertIn(expected, live["prompt"])
+        with self.assertRaises(HTTPException):
+            await api.end_live(key, api.LiveEnd(generation=5, transcript=[]))
+        await api.end_live(key, api.LiveEnd(generation=0, transcript=[
+            api.LiveLine(role="listener", text="Why did revenue grow?"),
+            api.LiveLine(role="host", text="Mostly stronger demand, the report says.")]))
+        self.assertEqual([line.speaker for line in item.panel.history][-2:],
+                         ["Listener", item.panel.personas[item.panel.host].name])
+        self.assertEqual(item.panel.phase, "resume")
+
+    async def test_live_needs_an_agent(self):
+        key = uuid4()
+        item = api.Session(fixture())
+        item.touched = time.monotonic()
+        api.sessions[key] = item
+        self.addCleanup(api.sessions.pop, key, None)
+        with patch.dict(os.environ, {"ELEVENLABS_AGENT_ID": ""}), self.assertRaises(HTTPException) as caught:
+            await api.start_live(key)
+        self.assertEqual(caught.exception.status_code, 503)
