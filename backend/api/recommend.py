@@ -7,7 +7,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from recommender.db import connect
 from recommender.embeddings import EmbeddingError
 from recommender.focus import parse_focus
-from recommender.recommend import NoProfileSignal, ProfileNotFound, load_listener, recommend
+from recommender.recommend import EXPLORATION, NoProfileSignal, ProfileNotFound, load_listener, recommend
 
 router = APIRouter(tags=["recommend"])
 
@@ -27,6 +27,9 @@ class RecommendRequest(BaseModel):
     pinned_article_ids: list[str] = Field(default_factory=list, max_length=30,
                                           description="Articles the listener picked; always included, first.")
     excluded_article_ids: list[str] = Field(default_factory=list, max_length=500)
+    exploration: float = Field(default=EXPLORATION, ge=0, le=0.2,
+                               description="How much the picks vary between calls: 0 always returns the same list.")
+    seed: int | None = Field(default=None, description="Repeat a previous random draw (for tests and debugging).")
 
 
 class Recommendation(BaseModel):
@@ -46,7 +49,8 @@ def recommend_articles(body: RecommendRequest, request: Request) -> Recommendati
             listener = load_listener(conn, str(body.user_id))
             return Recommendation(**recommend(
                 conn, listener, parse_focus(body.focus) if body.focus else None, body.pinned_article_ids,
-                body.excluded_article_ids, body.days, body.limit))
+                body.excluded_article_ids, body.days, body.limit,
+                exploration=body.exploration, seed=body.seed))
     except ProfileNotFound:
         raise HTTPException(status_code=404, detail="No profile with that user_id.") from None
     except NoProfileSignal as err:

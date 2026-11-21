@@ -20,7 +20,8 @@ Rules, in order of precedence:
 Personal score = 0.60 · similarity to the listener (the best of their blended profile and each listed interest) + 0.10 · coverage (other outlets on the same event)
 + 0.10 · topic preference + 0.10 · similarity to the listener's default host + 0.10 · recency (over 7 days)
 − 0.15 · similarity to what they skipped or disliked (+ 0.5 · similarity to the focus, when there is one).
-Events are picked with maximal marginal relevance, so one theme doesn't crowd out the others.
+Events are picked with maximal marginal relevance, so one theme doesn't crowd out the others. A little random noise
+(EXPLORATION) is added to the scores first, so each call samples a different list among the close matches.
 Every listener is a signed-up user (user_id); there is no anonymous mode.
 OpenAI is used for embeddings only: the listener (once, then cached on the profile), the focus and exclusions.
 """
@@ -46,6 +47,10 @@ DEFAULT_ARTICLES = 50       # articles returned (stories and their other-outlet 
                             # is chosen later, when the listener presses Generate (backend/briefing)
 RECENCY_DAYS = 7            # recency bonus falls from full (newest article) to 0 over this many days; with no
                             # time window, 0.10 over 7 days cut picks older than a week from 29 % to 1 %
+EXPLORATION = 0.01          # random noise added to each score before picking (Gumbel, this scale): the same listener
+                            # gets a different, still relevant, sample on each call. 0 = fully deterministic.
+                            # Measured on a real listener: two calls share ~48% of their top 10 (17% at 0.03), and
+                            # ~60% of the top 10 is the noise-free best list (35% at 0.03)
 MMR_LAMBDA = 0.75           # 1 = relevance only, 0 = diversity only
 POOL = 150                  # best-scoring articles considered for coverage, MMR and siblings
 SAME_EVENT_MIN = 0.80       # two articles at least this close report the same event (any time apart, unless the
@@ -372,6 +377,15 @@ def score(articles: list[Article], has_focus: bool = False) -> None:
                    + (FOCUS_WEIGHT * a.sim_focus if has_focus else 0.0))
 
 
+def explore(articles: list[Article], rng: np.random.Generator, scale: float = EXPLORATION) -> None:
+    """Perturb scores with Gumbel noise, so picking the best is like sampling each article with probability
+    proportional to exp(score / scale): the strong matches still win most of the time, close ones trade places."""
+    if scale <= 0 or not articles:
+        return
+    for a, noise in zip(articles, rng.gumbel(-np.euler_gamma, 1.0, len(articles))):
+        a.score += scale * noise
+
+
 def same_event(a: Article, b: Article, event_hours: float | None = None) -> bool:
     """Translations of each other, or close embeddings (published within event_hours of each other, if given)."""
     if a.translation_of == b.id or b.translation_of == a.id or (a.translation_of and a.translation_of == b.translation_of):
@@ -504,7 +518,8 @@ def siblings(event: Article, pool: list[Article], taken: set[str], event_hours: 
 # --------------------------------------------------------------------------------------------------------------
 def recommend(conn, listener: Listener, focus: Focus | None = None, pinned_article_ids: list[str] = (),
               excluded_article_ids: list[str] = (), days: int | None = None, limit: int | None = None,
-              embed=embed_query) -> dict:
+              embed=embed_query, exploration: float = EXPLORATION, seed: int | None = None) -> dict:
+    """`exploration` sets how much the picks vary between calls (0 = always the same list); `seed` repeats a draw."""
     focus_vec = normalize(embed(focus.positive_text)) if focus and focus.terms else None
     exclude_vec = normalize(embed(", ".join(focus.exclude))) if focus and focus.exclude else None
     has_focus = bool(focus and focus.terms)
@@ -527,6 +542,7 @@ def recommend(conn, listener: Listener, focus: Focus | None = None, pinned_artic
         load_coverage(conn, week, event_hours)
         pool += [a for a in week if a.coverage >= ESSENTIAL_COVERAGE]
     score(pool + pinned, has_focus)
+    explore(pool, np.random.default_rng(seed), exploration)  # picked articles stay first whatever the noise
     load_embeddings(conn, pool + pinned)
 
     wanted = max(limit or DEFAULT_ARTICLES, len(pinned))

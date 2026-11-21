@@ -10,7 +10,7 @@ from main import app
 from recommender.config import EMBED_MODEL
 from recommender.focus import parse_focus, tsquery_terms, word_patterns
 from recommender.hosts import host_affinity, rank_hosts, score_hosts
-from recommender.recommend import (Article, Listener, NoProfileSignal, ensure_user_embedding, interest_facets,
+from recommender.recommend import (Article, explore, Listener, NoProfileSignal, ensure_user_embedding, interest_facets,
                                    prefer_language,
                                    profile_text, recommend, score, select_events, siblings)
 
@@ -108,6 +108,20 @@ class SelectionTest(unittest.TestCase):
         score([close, old, base, covered])
         self.assertGreater(close.score, old.score)
         self.assertGreater(covered.score, base.score)
+
+    def test_exploration_varies_close_picks_but_keeps_clear_winners(self) -> None:
+        import numpy as np
+
+        def draw(seed: int, scale: float) -> list[str]:
+            pool = [article("best", score_=0.9)] + [article(f"near{i}", score_=0.5 + i / 1000) for i in range(5)]
+            explore(pool, np.random.default_rng(seed), scale)
+            return [a.id for a in sorted(pool, key=lambda a: a.score, reverse=True)]
+
+        self.assertEqual(draw(1, 0.0), ["best", "near4", "near3", "near2", "near1", "near0"])
+        orders = [draw(seed, 0.03) for seed in range(20)]
+        self.assertTrue(all(order[0] == "best" for order in orders))
+        self.assertGreater(len({tuple(order) for order in orders}), 1)
+        self.assertEqual(draw(7, 0.03), draw(7, 0.03))
 
     def test_pins_come_first_and_extend_the_budget(self) -> None:
         chosen = select_events([article("a", score_=0.9)], [article("p1"), article("p2", embedding=(0, 1))],
