@@ -8,11 +8,32 @@ const ts = require('typescript')
 // Use the installed compiler to exercise the same TypeScript helper as the browser.
 const source = path.resolve(__dirname, '../src/briefings.ts')
 const compiled = ts.transpileModule(readFileSync(source, 'utf8'), {
-  compilerOptions: { module: ts.ModuleKind.CommonJS, esModuleInterop: true },
+  compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022, esModuleInterop: true },
 }).outputText
 const helpers = {}
 new Function('require', 'exports', compiled)(createRequire(source), helpers)
 const { factChecksAt, heardFactChecks, recordedTurns, sampleHeadlines } = helpers
+
+test('history keeps unique nonempty transcripts and citations without audio', () => {
+  const turn = recordedTurns(sampleHeadlines)[0]
+  const original = { id: 'original', date: '2026-11-20', titles: ['Story', 'Story'], sample: false,
+    entries: [turn, { ...turn, id: 'retry', text: '  ' + turn.text.toUpperCase() + '  ', audio: 'large-audio' },
+      { id: 'empty', speaker: 'Listener', text: '  ' }, { ...turn, id: 'pending', text: '…' },
+      { id: 'question', speaker: 'Listener', text: 'Why does this matter?' }] }
+  const duplicate = { ...original, id: 'duplicate', date: '2026-11-21' }
+  const distinct = { ...original, id: 'distinct', entries: [{ ...turn, text: 'A different discussion.' }] }
+  const saved = helpers.savedBriefings([original, duplicate, distinct, { ...original, id: 'empty', entries: [] }])
+  assert.deepEqual(saved.map(row => row.id), ['duplicate', 'distinct'])
+  assert.equal(saved[0].entries.length, 2)
+  assert.deepEqual(saved[0].titles, ['Story'])
+  assert.deepEqual(saved[0].entries[0].sources, turn.sources)
+  for (const row of saved) for (const entry of row.entries) {
+    assert.ok(!('audio' in entry))
+    assert.ok(!('audioUrl' in entry))
+  }
+  assert.deepEqual(helpers.savedBriefings(saved), saved)
+  assert.ok('audioUrl' in original.entries[0], 'live playback data must stay untouched')
+})
 
 test('fact checks follow script cues and recompute when seeking backwards', () => {
   const first = { claim: 'Revenue rose.' }, second = { claim: 'Rates held.' }

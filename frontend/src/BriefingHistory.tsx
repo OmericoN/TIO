@@ -1,40 +1,23 @@
-import { useEffect, useRef, useState } from 'react'
-import { audioUrl, historyStore, sampleArticle } from './briefings'
-import type { Briefing, Card, Segment } from './briefings'
+import { useEffect, useState } from 'react'
+import { historyStore, sampleArticle } from './briefings'
+import type { Briefing, Card } from './briefings'
 
 function Sources({ cards }: { cards: Card[] }) {
   if (!cards.length) return null
-  return <aside className="sources" aria-label="Supporting sources">
-    <h3>Supporting sources</h3>
-    {cards.map((s, i) => {
+  const sources = cards.filter((s, i) => cards.findIndex(other => (other.url || other.id) === (s.url || s.id)) === i)
+  return <p className="history-sources" aria-label="Supporting sources">
+    Sources: {sources.map((s, i) => {
       const url = s.url ?? (sampleArticle(s.id) ? '/sample-source?id=' + encodeURIComponent(s.id) : null)
-      return <blockquote key={i}>
-      <cite>{url ? <a href={url} target="_blank" rel="noreferrer">{s.publisher}</a> : s.publisher}</cite>
-      <p><strong>{s.claim}</strong></p><p lang={s.language}>“{s.quote}”</p>
-      </blockquote>
+      return <span key={i}>{i > 0 && ' · '}{url ? <a href={url} target="_blank" rel="noreferrer">{s.publisher}</a> : s.publisher}</span>
     })}
-  </aside>
+  </p>
 }
 
 function SavedConversation({ briefing }: { briefing: Briefing }) {
-  const turns = briefing.entries.filter((e): e is Segment => 'sources' in e)
-  const [turn, setTurn] = useState(turns[0])
-  const audio = useRef<HTMLAudioElement>(null)
-  function play(next: Segment) {
-    const player = audio.current
-    if (!player) return
-    setTurn(next)
-    player.src = audioUrl(next)
-    void player.play().catch(() => {})
-  }
   return <div className="history-lines">
-    {turn && <><audio ref={audio} controls preload="none" aria-label="Replay briefing" src={audioUrl(turns[0])} onEnded={() => {
-      const next = turns[turns.indexOf(turn) + 1]
-      if (next) play(next)
-    }} /><Sources cards={turn.sources} /></>}
     {briefing.entries.map(e => <article key={e.id}>
       <h3>{e.speaker}</h3><p>{e.text}</p>
-      {'sources' in e && <button className="replay-turn" onClick={() => play(e)}>Play this turn</button>}
+      {'sources' in e && <Sources cards={e.sources} />}
     </article>)}
   </div>
 }
@@ -55,14 +38,14 @@ export function Briefings({ owner }: { owner: string }) {
     <div className="page-title"><h1>Briefings</h1></div>
     {error && <p role="alert">{error}</p>}
     {!ready && !error && <p role="status">Opening your briefings…</p>}
-    {ready && !sessions.length && <div className="history-empty"><h2>Your conversations live here.</h2><p>Choose a headline in News feed and start a briefing with the host. You can return here to listen again or read the sources.</p></div>}
+    {ready && !sessions.length && <div className="history-empty"><h2>Your transcripts live here.</h2><p>Start a briefing from News feed. Key discussion transcripts and source links are saved here.</p></div>}
     {sessions.map(s => <section className="history-item glass-card" key={s.id}>
       <button className="history-title" aria-expanded={open === s.id} onClick={() => setOpen(open === s.id ? '' : s.id)}>
         <span>{new Date(s.date).toLocaleString()} · {s.sample ? 'Sample briefing' : 'Briefing'}</span>
         <strong>{s.titles.join(' · ')}</strong>
       </button>
       {open === s.id && <div><SavedConversation briefing={s} /><button className="remove-briefing" onClick={async () => {
-        if (!window.confirm('Delete this briefing and its audio from this device?')) return
+        if (!window.confirm('Delete this transcript from this device?')) return
         try { await historyStore(owner, s.id); setSessions(rows => rows.filter(row => row.id !== s.id)); setOpen('') }
         catch { setError('Could not delete this briefing. Try again.') }
       }}>Delete briefing</button></div>}
