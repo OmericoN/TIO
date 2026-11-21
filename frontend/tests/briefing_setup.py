@@ -20,17 +20,25 @@ with sync_playwright() as p:
         starts, turns, errors = [], [], []
         opening_route = []
         page.on('pageerror', lambda e: errors.append(str(e)))
-        page.route('**/api/panel/stories', lambda r: r.fulfill(json={'sample': False, 'stories': [
-            {'id': 'story', 'title': 'A briefing topic', 'summary': 'Test summary', 'topic': 'Economy'}]}))
+        feed = [{'id': 'story', 'title': 'A briefing topic', 'summary': 'Test summary', 'topic': 'Economy'}]
+        if width == 524:
+            feed.extend({**feed[0], 'id': f'story-{i}', 'title': f'Topic {i} headline'} for i in (2, 3))
+        page.route('**/api/panel/stories', lambda r: r.fulfill(json={'sample': False, 'stories': feed}))
 
         def start(route):
             starts.append(route.request.post_data_json)
             route.fulfill(json={'id': 'test', 'sample': False})
 
         opening = {
-            'id': 'opening', 'story_id': 'story', 'story': 'A briefing topic', 'speaker': 'Host',
+            'id': 'opening', 'story_id': 'story', 'story': 'A briefing topic', 'speaker': 'tio',
             'speaker_id': 'host', 'guests': ['Expert One', 'Expert Two', 'Expert Three', 'Expert Four'],
-            'brief': 'Welcome to the panel.', 'sources': [], 'max_seconds': 8,
+            'brief': 'Welcome to the panel.', 'max_seconds': 8,
+            'sources': [
+                {'id': 'one', 'publisher': 'Sample Markets', 'language': 'en', 'url': 'https://example.org/article',
+                 'quote': 'The full supporting passage from the first article.', 'claim': 'The first verified fact.'},
+                {'id': 'two', 'publisher': 'Sample Economy', 'language': 'en', 'url': None,
+                 'quote': 'An additional supporting passage.', 'claim': 'The first verified fact.'},
+            ],
         }
 
         def turn(route):
@@ -38,14 +46,20 @@ with sync_playwright() as p:
             if len(turns) == 1:
                 opening_route.append(route)
             else:
-                route.fulfill(json=opening)
+                next_source = {**opening['sources'][0], 'claim': 'The next verified fact.'}
+                current_story = {'story_id': 'story-2', 'story': 'Topic 2 headline'} if width == 524 and len(turns) >= 3 else {}
+                route.fulfill(json={**opening, **current_story, 'id': 'next', 'speaker': 'Expert One', 'speaker_id': 'expert', 'sources': [next_source]})
 
         page.route('**/api/panel', start)
         page.route('**/api/panel/test/realtime/agents', lambda r: r.fulfill(json={
-            'model': 'test', 'agents': [{'id': 'host', 'name': 'Host', 'role': 'host', 'voice': 'test'}],
+            'model': 'test', 'agents': [
+                {'id': 'host', 'name': 'tio', 'role': 'host', 'voice': 'test'},
+                {'id': 'expert', 'name': 'Expert One', 'role': 'guest', 'voice': 'test'},
+            ],
         }))
         page.route('**/api/panel/test/realtime/next', turn)
         page.route('**/api/panel/test/holding', lambda r: r.fulfill(status=404))
+        page.route('**/api/panel/test/live/audit', lambda r: r.fulfill(status=204))
         page.route('**/api/panel/test', lambda r: r.fulfill(status=204))
         page.route('https://api.openai.com/**', lambda r: r.abort())
         page.goto('http://localhost:5173/demo')
@@ -70,6 +84,9 @@ with sync_playwright() as p:
         select_article.press('Space')
         expect(select_article).to_have_attribute('aria-pressed', 'false')
         select_article.press('Enter')
+        if width == 524:
+            for i in (2, 3):
+                page.get_by_role('button', name=f'Select article: Topic {i} headline').click()
         page.get_by_role('button', name='Start agent discussion').click()
         duration = page.get_by_role('slider', name='Duration')
         experts = page.get_by_role('slider', name='Expert participants')
@@ -88,15 +105,22 @@ with sync_playwright() as p:
             input.connect(gain).connect(output);
             input.start();
             await context.resume();
-            window.testMic = { gain, track: output.stream.getAudioTracks()[0], cancelled: 0 };
+            const track = output.stream.getAudioTracks()[0];
+            window.testMic = { gain, track, speaker: new MediaStream([track.clone()]), cancelled: 0 };
             window.testMic.track.enabled = false;
             return output.stream;
           };
           RealtimeAgent.connect = async (info, _model, _microphone, handlers) => {
             let finish;
             return {
-              info, speak: () => new Promise(resolve => { finish = resolve; }), close() {},
-              cancel() { window.testMic.cancelled++; finish({ text: '', seconds: 1, interrupted: true }); },
+              info, audio: {srcObject: window.testMic?.speaker}, speak: (_brief, _seconds, onText) => new Promise(resolve => {
+                handlers.onSpeaking(true); finish = resolve;
+                window.mockSpeech = { transcript: onText, drain() {
+                  handlers.onSpeaking(false);
+                  resolve({ text: 'The first verified fact.', seconds: 1, interrupted: false, audioDrained: true });
+                }};
+              }), context() {}, close() {},
+              cancel() { window.testMic.cancelled++; handlers.onSpeaking(false); finish({ text: '', seconds: 1, interrupted: true, audioDrained: false }); },
               startListening() { window.testMic.track.enabled = true; },
               stopListening() {
                 window.testMic.track.enabled = false;
@@ -148,34 +172,91 @@ with sync_playwright() as p:
             page.get_by_role('button', name='Begin briefing').click()
         orb = page.locator('.host-load')
         expect(orb).to_have_attribute('data-phase', 'loading')
-        expect(orb).to_have_css('filter', 'grayscale(1) brightness(0.82)')
+        expect(orb.locator('.host-core')).to_have_css('opacity', '0')
+        glass = orb.locator('.host-glass')
+        expect(glass).to_have_css('--host-aperture', 'calc(100% - 7px)')
+        expect(page.locator('.actor.host > span')).to_be_hidden()
+        expect(page.locator('.player-status.sr-only')).to_have_count(1)
+        ring = orb.locator('.host-ring')
+        expect(ring).to_have_css('opacity', '1')
+        expect(orb).to_have_css('transform', 'none')
+        assert 'radial-gradient' in ring.evaluate('e => getComputedStyle(e).maskImage')
         expect(page.locator('.talk-deck')).to_have_count(0)
         if width == 524:
-            page.wait_for_function("new DOMMatrix(getComputedStyle(document.querySelector('.host-load')).transform).a < .24")
-            page.wait_for_function("new DOMMatrix(getComputedStyle(document.querySelector('.host-load')).transform).a > .85")
+            assert ring.evaluate("e => getComputedStyle(e, '::before').animationPlayState") == 'running'
+            page.locator('.agent-stage').evaluate("""stage => {
+                window.guestArrivals = [];
+                new MutationObserver(records => records.forEach(({target}) => {
+                    const orb = stage.querySelector('.host-core');
+                    const glass = stage.querySelector('.host-glass');
+                    const motion = target.querySelector('.guest-bud').getAnimations()[0];
+                    window.guestArrivals.push({opacity: getComputedStyle(orb).opacity,
+                        aperture: getComputedStyle(glass).getPropertyValue('--host-aperture'),
+                        from: motion?.effect.getKeyframes()[0].transform,
+                        delay: motion?.effect.getTiming().delay});
+                })).observe(stage, {subtree: true, attributeFilter: ['data-born']});
+            }""")
         else:
-            expect(orb).to_have_css('transform', 'none')
+            assert ring.evaluate("e => getComputedStyle(e, '::before').animationName") == 'none'
         opening_route.pop().fulfill(json=opening)
         expect(page.get_by_role('list', name='Topic checkpoints')).to_be_visible()
         expect(orb).to_have_attribute('data-phase', 'ready')
         if width == 524:
-            assert orb.evaluate('e => e.getAnimations().some(a => a.effect.getTiming().duration === 520)')
             expect(page.locator('.talk-deck')).to_have_css('animation-name', 'talk-deck-arrive')
-        expect(orb).to_have_css('filter', 'none')
+        expect(glass).to_have_css('--host-aperture', '0%')
+        expect(orb.locator('.host-core')).to_have_css('opacity', '1')
+        expect(ring).to_have_css('opacity', '0')
+        expect(ring).to_be_hidden()
         expect(orb).to_have_css('transform', 'none')
         assert len(starts) == len(turns) == 1
         assert starts[0]['minutes'] == 7 and starts[0]['expert_count'] == 4
-        assert starts[0]['story_ids'] == ['story']
+        assert starts[0]['story_ids'] == (['story', 'story-2', 'story-3'] if width == 524 else ['story'])
         expect(page.locator('.checkpoint-title')).to_have_count(0)
         expect(page.locator('.session-headline')).to_have_text('A briefing topic')
         expect(page.get_by_role('group', name='Briefing setup')).to_have_count(0)
         expect(page.locator('.guest')).to_have_count(4)
-        actors = [node.bounding_box() for node in page.locator('.actor .orb-meter').all()]
+        expect(page.locator('.actor.host > span')).to_have_text('Tio')
+        expect(page.locator('.guest[data-born="true"]')).to_have_count(4)
+        expect(page.get_by_role('textbox', name='Question for the panel')).to_have_count(0)
+        expect(page.locator('.actor.host')).to_have_attribute('data-speaking', 'true')
+        expect(page.locator('.guest[data-speaking="true"]')).to_have_count(0)
+        if width == 524:
+            arrivals = page.evaluate('window.guestArrivals')
+            assert len(arrivals) == 4
+            assert all(row['opacity'] == '1' and row['aperture'] == '0%' and row['from'].startswith('translate(') for row in arrivals)
+            assert [row['delay'] for row in arrivals] == [0, 70, 140, 210]
+            page.locator('.guest-bud').evaluate_all('nodes => Promise.all(nodes.flatMap(node => node.getAnimations().map(a => a.finished)))')
+            expect(page.locator('.actor.host .orb-meter')).to_have_css('transform', 'matrix(1.12, 0, 0, 1.12, 0, 0)')
+            host_orb = page.locator('.actor.host .orb-breath')
+            expect(page.locator('.actor.host')).to_have_attribute('data-audio-pulse', 'true')
+            expect(host_orb).to_have_css('transform', 'matrix(1, 0, 0, 1, 0, 0)')
+            page.evaluate('window.testMic.gain.gain.value = 0.5')
+            page.wait_for_function("new DOMMatrix(getComputedStyle(document.querySelector('.actor.host .orb-breath')).transform).d > 1.1")
+            page.evaluate('window.testMic.gain.gain.value = 0')
+        else:
+            expect(page.locator('.actor.host .orb-meter')).to_have_css('transform', 'none')
+        actors = [node.bounding_box() for node in page.locator('.actor .orb-skin').all()]
         for i, a in enumerate(actors):
             assert a['x'] >= 0 and a['x'] + a['width'] <= width
             for b in actors[i + 1:]:
                 assert a['x'] + a['width'] <= b['x'] or b['x'] + b['width'] <= a['x'] or a['y'] + a['height'] <= b['y'] or b['y'] + b['height'] <= a['y']
         if width == 524:
+            fact = page.get_by_role('complementary', name='Fact check')
+            expect(fact).to_have_count(0)
+            page.evaluate("window.mockSpeech.transcript('The first verified fact.')")
+            expect(fact).to_have_count(0)
+            page.evaluate('window.mockSpeech.drain()')
+            expect(fact.locator('blockquote p')).to_have_text('The first verified fact.')
+            expect(page.locator('.guest-0')).to_have_attribute('data-speaking', 'true')
+            with page.context.expect_page() as new_tab:
+                fact.get_by_role('button', name='Open supporting passage in a new tab').click()
+            proof = new_tab.value
+            expect(proof.locator('blockquote')).to_have_text([
+                'The full supporting passage from the first article.', 'An additional supporting passage.',
+            ])
+            expect(proof.get_by_role('link', name='Read the original article')).to_have_attribute('href', 'https://example.org/article')
+            proof.close()
+            page.bring_to_front()
             deck = page.get_by_role('button', name='Interrupt with microphone')
             bars = deck.locator('.talk-waveform > span')
             bar = bars.first
@@ -187,6 +268,8 @@ with sync_playwright() as p:
             expect(deck).to_have_css('transform', 'matrix(1.035, 0, 0, 1.035, 0, -2)')
             deck.click()
             expect(deck).to_have_attribute('aria-pressed', 'true')
+            expect(page.locator('.actor.host')).to_have_attribute('data-speaking', 'false')
+            expect(page.locator('.guest-0')).to_have_attribute('data-speaking', 'false')
             assert page.evaluate('window.testMic.track.enabled && window.testMic.cancelled === 1')
             expect(bar).to_have_css('transform', 'matrix(1, 0, 0, 0.52, 0, 0)')
             page.evaluate('window.testMic.gain.gain.value = 0.5')
@@ -202,6 +285,12 @@ with sync_playwright() as p:
             with page.expect_request('**/api/panel/test/realtime/next') as question:
                 deck.press('Space')
             assert question.value.post_data_json['question'] == 'Next story please'
+            expect(page.locator('.guest-0')).to_have_attribute('data-speaking', 'true')
+            expect(page.locator('.actor.host')).to_have_attribute('data-speaking', 'false')
+            expect(page.locator('.session-headline')).to_have_text('Topic 2 headline')
+            expect(page.locator('.agenda-label')).to_have_text('Topic 2 of 3')
+            timeline = page.get_by_role('list', name='Topic checkpoints')
+            assert timeline.evaluate("e => new DOMMatrix(getComputedStyle(e, '::after').transform).a") == .5
             assert not page.evaluate('window.testMic.track.enabled')
             expect(deck).to_have_attribute('aria-pressed', 'false')
             expect(deck).to_be_enabled()

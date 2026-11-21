@@ -55,10 +55,21 @@ export function audioUrl(segment: Segment) {
 export function factChecksAt(segment: Segment, fraction: number): Card[] {
   // shortcut: script position approximates speech timing, use word timestamps when TTS returns alignment.
   const position = segment.text.length * Math.max(0, Math.min(1, fraction))
-  const cues = segment.sources.map(card => ({ card, at: segment.text.toLowerCase().indexOf(card.claim.toLowerCase()) }))
-    .filter(cue => cue.card.claim.trim() && cue.at >= 0 && cue.at <= position)
+  const text = segment.text.toLowerCase()
+  const cues = segment.sources.map(card => ({ card, at: text.indexOf(card.claim.toLowerCase()) }))
+    .filter(cue => cue.card.claim.trim() && cue.at >= 0 && cue.at + cue.card.claim.length <= position)
   const latest = Math.max(-1, ...cues.map(cue => cue.at))
   return cues.filter(cue => cue.at === latest).map(cue => cue.card)
+}
+
+export function heardFactChecks(cards: Card[], transcript: string): Card[] {
+  const words = (text: string) => text.normalize('NFKC').toLowerCase().replace(/%/g, ' percent ')
+    .match(/[+−-]?\p{N}+(?:[.,]\p{N}+)*|\p{L}+|\p{Sc}/gu)?.join(' ') ?? ''
+  const heard = ` ${words(transcript)} `
+  return cards.filter(card => {
+    const claim = words(card.claim)
+    return claim !== '' && heard.includes(` ${claim} `)
+  })
 }
 
 // Separate databases keep demo and signed-in listeners' device histories independent.

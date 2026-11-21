@@ -135,7 +135,7 @@ with sync_playwright() as p:
         'story': {'headline': 'A briefing topic', 'publication': 'Sample Markets', 'language': 'en'},
     }))
     page.route('**/api/briefing/generate', lambda route: route.fulfill(json={
-        'segments': [{'article_ids': ['story']}], 'hosts': [], 'tones': {},
+        'segments': [{'article_ids': ['story']}], 'hosts': [ADA, GRACE], 'tones': {},
     }))
 
     def sign_in(route):

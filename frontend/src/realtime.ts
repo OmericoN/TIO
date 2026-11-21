@@ -3,9 +3,10 @@
 // for push-to-talk transcription.
 
 export type AgentInfo = { id: string; name: string; role: 'host' | 'guest'; voice: string; secret: string }
-export type Spoken = { text: string; seconds: number; interrupted: boolean }
+export type Spoken = { text: string; seconds: number; interrupted: boolean; audioDrained: boolean }
 
 type Handlers = {
+  onSpeaking?: (speaking: boolean) => void
   onListenerText?: (text: string) => void
 }
 
@@ -79,18 +80,25 @@ export class RealtimeAgent {
           this.finish(true)
         }
         break
+      case 'output_audio_buffer.started':
+        this.handlers.onSpeaking?.(true)
+        break
+      case 'output_audio_buffer.cleared':
+        this.handlers.onSpeaking?.(false)
+        break
       case 'output_audio_buffer.stopped':
-        this.finish(false)
+        this.finish(false, true)
         break
     }
   }
 
-  private finish(interrupted: boolean) {
+  private finish(interrupted: boolean, audioDrained = false) {
     const turn = this.turn
     if (!turn) return
     this.turn = null
     clearTimeout(turn.timer)
-    turn.resolve({ text: turn.text.trim(), seconds: (performance.now() - turn.started) / 1000, interrupted })
+    this.handlers.onSpeaking?.(false)
+    turn.resolve({ text: turn.text.trim(), seconds: (performance.now() - turn.started) / 1000, interrupted, audioDrained })
   }
 
   /** Speaks a turn brief in the agent's own words; resolves when its audio has finished playing or was cut off. */

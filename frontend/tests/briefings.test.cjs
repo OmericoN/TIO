@@ -12,16 +12,25 @@ const compiled = ts.transpileModule(readFileSync(source, 'utf8'), {
 }).outputText
 const helpers = {}
 new Function('require', 'exports', compiled)(createRequire(source), helpers)
-const { factChecksAt, recordedTurns, sampleHeadlines } = helpers
+const { factChecksAt, heardFactChecks, recordedTurns, sampleHeadlines } = helpers
 
 test('fact checks follow script cues and recompute when seeking backwards', () => {
   const first = { claim: 'Revenue rose.' }, second = { claim: 'Rates held.' }
   const segment = { text: 'Welcome. Revenue rose. Next, Rates held.', sources: [first, second] }
   assert.deepEqual(factChecksAt(segment, 0), [])
-  assert.deepEqual(factChecksAt(segment, .4), [first])
+  assert.deepEqual(factChecksAt(segment, .4), [])
+  assert.deepEqual(factChecksAt(segment, .6), [first])
   assert.deepEqual(factChecksAt(segment, 1), [second])
-  assert.deepEqual(factChecksAt(segment, .4), [first])
+  assert.deepEqual(factChecksAt(segment, .6), [first])
   assert.deepEqual(factChecksAt(segment, -1), [])
+})
+
+test('live fact checks exclude claims skipped or changed by the speaker', () => {
+  const first = { claim: 'Revenue rose 7.1%.' }, other = { ...first }
+  const cards = [{ claim: 'Margins rose.' }, first, other, { claim: 'Revenue rose 7.1% year over year.' }]
+  assert.deepEqual(heardFactChecks(cards, 'Revenue rose 7.1 percent.'), [first, other])
+  assert.deepEqual(heardFactChecks(cards, 'Revenue rose 7.12 percent.'), [])
+  assert.deepEqual(heardFactChecks([{ claim: 'Revenue was $27.1 billion.' }], 'Revenue was €27.1 billion.'), [])
 })
 
 test('a claim keeps all its supporting sources and ignores unmapped or empty claims', () => {

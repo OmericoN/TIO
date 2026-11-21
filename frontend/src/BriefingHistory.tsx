@@ -2,17 +2,15 @@ import { useEffect, useRef, useState } from 'react'
 import { audioUrl, historyStore, sampleArticle } from './briefings'
 import type { Briefing, Card, Segment } from './briefings'
 
-export function Sources({ cards, compact = false }: { cards: Card[]; compact?: boolean }) {
+function Sources({ cards }: { cards: Card[] }) {
   if (!cards.length) return null
-  return <aside className={compact ? 'fact-check glass-card' : 'sources'} aria-label={compact ? 'Fact check' : 'Supporting sources'}>
-    <h3>{compact ? 'Fact check' : 'Supporting sources'}</h3>
-    {compact && <p className="fact-claim">{cards[0].claim}</p>}
+  return <aside className="sources" aria-label="Supporting sources">
+    <h3>Supporting sources</h3>
     {cards.map((s, i) => {
       const url = s.url ?? (sampleArticle(s.id) ? '/sample-source?id=' + encodeURIComponent(s.id) : null)
       return <blockquote key={i}>
       <cite>{url ? <a href={url} target="_blank" rel="noreferrer">{s.publisher}</a> : s.publisher}</cite>
-      {compact ? <details><summary>Source excerpt</summary><p lang={s.language}>“{s.quote}”</p></details>
-        : <><p><strong>{s.claim}</strong></p><p lang={s.language}>“{s.quote}”</p></>}
+      <p><strong>{s.claim}</strong></p><p lang={s.language}>“{s.quote}”</p>
       </blockquote>
     })}
   </aside>

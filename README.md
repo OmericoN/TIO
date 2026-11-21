@@ -42,7 +42,7 @@ Open the URL Vite prints, usually [http://localhost:5173](http://localhost:5173)
 
 For a local demo, select **Open demo in a new tab** on the sign-in screen or open [the demo workspace](http://localhost:5173/demo) directly. Demo access is available on localhost with the Vite development server.
 
-Both servers can start without provider credentials. For generated discussions, configure the model and speaker voices in the [panel engine guide](docs/panel-engine.md). Typed questions and optional microphone input are available during generated sessions. Remove any locally saved licensed briefings after the hackathon.
+Both servers can start without provider credentials. For generated discussions, configure the model and speaker voices in the [panel engine guide](docs/panel-engine.md). Use the microphone deck to interrupt a generated briefing. Remove any locally saved licensed briefings after the hackathon.
 
 ## Guides
 

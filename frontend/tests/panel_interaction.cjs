@@ -29,23 +29,37 @@ async function check(browser) {
     return route.fulfill({ json: { id, speaker_id: speaker.id, speaker: speaker.name, story_id: 'story',
       story: 'Quarterly growth', guests: [guest.name], max_seconds: 15,
       brief: step.question ? 'The report compares the same quarter.' : 'The panel is ready.',
-      sources: [{ id, publisher: 'Source ' + id, claim: 'Quarterly growth', quote: 'Same quarter', language: 'en' }] } })
+      sources: [{ id, publisher: 'Source ' + id, claim: 'The report compares the same quarter.', quote: 'Same quarter', language: 'en' }],
+      visual: step.question === 'Leila, what changed?' ? {
+        kind: 'flow', title: 'How the comparison works', sources: ['Quarterly report'],
+        steps: ['Compare the same quarter'], step_cards: [id],
+        evidence: { [id]: { point: 'Compare the same quarter', quotes: [
+          { publisher: 'Quarterly report', quote: 'The report uses the prior year quarter.' },
+        ] } },
+      } : null } })
   })
   await page.route('**/src/realtime.ts*', route => route.fulfill({ contentType: 'application/javascript', body: `
     export class RealtimeAgent {
       static async connect(info, model, mic, handlers) {
         let resolveTurn, words
         return { info, context() {}, close() {}, startListening() {},
-          stopListening() { handlers.onListenerText('Which quarter does this cover?') },
+          stopListening() { handlers.onListenerText(window.panelQuestion) },
           speak(text, seconds, onText) {
+            handlers.onSpeaking(true)
             words = text
             onText(text)
             return new Promise(resolve => {
               resolveTurn = resolve
-              window.finishPanelTurn = () => resolve({ text, seconds: 8, interrupted: false })
+              window.finishPanelTurn = () => {
+                handlers.onSpeaking(false)
+                resolve({ text, seconds: 8, interrupted: false, audioDrained: true })
+              }
             })
           },
-          cancel() { resolveTurn?.({ text: words, seconds: 1, interrupted: true }) },
+          cancel() {
+            handlers.onSpeaking(false)
+            resolveTurn?.({ text: words, seconds: 1, interrupted: true, audioDrained: false })
+          },
         }
       }
     }` }))
@@ -54,25 +68,32 @@ async function check(browser) {
   await page.getByRole('button', { name: 'Start agent discussion' }).click()
   assert.equal(await page.getByLabel('Format').count(), 0)
   await page.getByRole('button', { name: 'Begin briefing' }).click()
-  const turnSource = n => page.getByText('Source turn-' + n, { exact: true }).waitFor()
-  await turnSource(1)
-  const ask = async text => {
-    await page.getByRole('textbox', { name: 'Question for the panel' }).fill(text)
-    await page.getByRole('button', { name: 'Ask', exact: true }).click()
-  }
-  await ask('Leila, what changed?')
-  await turnSource(2)
-  assert.match(await page.locator('.actor[data-speaking="true"]').innerText(), new RegExp(guest.name))
-  if (process.env.TIO_TEST_SCREENSHOT) await page.screenshot({ path: process.env.TIO_TEST_SCREENSHOT })
-  await page.evaluate(() => window.finishPanelTurn())
-  await turnSource(3)
+  const activeSpeaker = name => page.locator('.actor[data-speaking="true"]').filter({ hasText: name }).waitFor()
   const talk = page.getByRole('button', { name: 'Interrupt with microphone' })
-  await talk.click()
-  await talk.press('Space')
-  await turnSource(4)
+  const ask = async text => {
+    await page.evaluate(question => { window.panelQuestion = question }, text)
+    await talk.click()
+    await talk.press('Space')
+  }
+  await activeSpeaker(host.name)
+  assert.equal(await page.getByRole('textbox', { name: 'Question for the panel' }).count(), 0)
+  await ask('Leila, what changed?')
+  await activeSpeaker(guest.name)
+  assert.equal(steps[1].question, 'Leila, what changed?')
+  const visual = page.getByRole('figure', { name: 'How the comparison works' })
+  await visual.getByRole('button', { name: 'Compare the same quarter' }).click()
+  await visual.getByText('The report uses the prior year quarter.', { exact: false }).waitFor()
+  await visual.getByRole('button', { name: 'Keep' }).click()
+  assert.equal(await page.getByRole('complementary', { name: 'Fact check' }).count(), 0)
+  await page.evaluate(() => window.finishPanelTurn())
+  await page.getByRole('complementary', { name: 'Fact check' }).waitFor()
+  if (process.env.TIO_TEST_SCREENSHOT) await page.screenshot({ path: process.env.TIO_TEST_SCREENSHOT })
+  await activeSpeaker(host.name)
+  assert.equal(await visual.getByRole('button', { name: 'Kept' }).getAttribute('aria-pressed'), 'true')
+  await ask('Which quarter does this cover?')
+  await activeSpeaker(guest.name)
   assert.equal(steps[3].question, 'Which quarter does this cover?')
   assert.equal(steps[3].interrupted, true)
-  assert.match(await page.locator('.actor[data-speaking="true"]').innerText(), new RegExp(guest.name))
   const entries = await page.evaluate(async () => (await (await import('/src/briefings.ts')).historyStore('demo'))[0].entries)
   const saved = entries.find(entry => entry.id === 'turn-2')
   assert.equal(saved.text, 'The report compares the same quarter.')
@@ -82,7 +103,7 @@ async function check(browser) {
   await page.getByText('Briefing complete.', { exact: true }).waitFor()
   assert.equal(await page.locator('vite-error-overlay').count(), 0)
   assert.deepEqual(errors, [])
-  console.log('Panel', await page.title(), page.url(), 'typed, microphone deck, sources, history and skip passed')
+  console.log('Panel', await page.title(), page.url(), 'named expert, microphone deck, sources, history and skip passed')
   await page.close()
 }
 
