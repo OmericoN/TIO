@@ -237,3 +237,14 @@ class MatchedPanelTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(costs["full_usd"], 18)
         self.assertEqual(costs["10x_articles_same_listeners_usd"], 18)
         self.assertEqual(costs["10x_articles_and_listeners_usd"], 180)
+
+
+from discussion.matched import DiscussionPlan  # noqa: E402
+
+
+class PlanSizeTest(unittest.TestCase):
+    def test_a_plan_can_carry_up_to_four_experts(self):
+        segment = {"article_ids": ["a"], "estimated_seconds": 60}
+        DiscussionPlan(segments=[segment], hosts=[UUID(int=i) for i in range(1, 5)], tones={})
+        with self.assertRaises(ValueError):
+            DiscussionPlan(segments=[segment], hosts=[UUID(int=i) for i in range(1, 6)], tones={})
