@@ -691,13 +691,30 @@ class RealtimePanelTest(unittest.IsolatedAsyncioTestCase):
     def test_every_speaker_gets_a_distinct_voice(self):
         from discussion import realtime
         panel = fixture()
-        cast = lambda persona: realtime.VoiceProfile(voices=["marin", "cedar", "coral"], direction=f"{persona.name} voice.")
+        cast = lambda persona: realtime.VoiceProfile(voices=["marin", "cedar", "coral"], direction=f"{persona.name} voice.",
+                                                     accent_sounds=["Roll every r: 'rate' starts with a trill"])
         chosen = realtime.voices(panel, cast)                        # everyone's first choice is marin
         self.assertEqual(chosen[panel.host][0], "marin")
         self.assertEqual(len({voice for voice, _ in chosen.values()}), len(chosen))
         instructions = realtime.agent_instructions(panel, panel.host, chosen[panel.host][1])
         self.assertIn("TURN BRIEF", instructions)
         self.assertIn("# Your voice", instructions)
+
+    def test_accent_leads_the_instructions_and_closes_every_brief(self):
+        # Live voices drift toward a neutral accent, so the accent and its signature sounds come first in the standing
+        # instructions, and every turn brief ends by asking for it again.
+        from discussion import realtime
+        panel = fixture()
+        panel.personas[panel.host] = panel.personas[panel.host].model_copy(update={"accent": "strong Parisian French accent"})
+        profile = realtime.VoiceProfile(voices=["cedar"], direction="You speak warmly.",
+                                        accent_sounds=["Drop every h: 'happy' sounds like 'appy'"])
+        instructions = realtime.agent_instructions(panel, panel.host, realtime.cast_direction(profile))
+        self.assertLess(instructions.index("strong Parisian French accent"), instructions.index("# Your role"))
+        self.assertIn("- Drop every h: 'happy' sounds like 'appy'", instructions)
+        brief = realtime.TurnBrief(take="A view", goal="Open", points=["Growth"], card_ids=[], facts=[], handoff=None,
+                                   action="respond", max_seconds=12, visual=None)
+        self.assertTrue(realtime.render_brief(panel, brief).endswith(
+            "don't let it fade toward a neutral accent as the show goes on."))
 
 
 class ShowStructureTest(unittest.TestCase):

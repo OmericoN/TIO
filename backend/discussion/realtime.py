@@ -107,6 +107,9 @@ class VoiceProfile(StructuredOutput):
     voices: list[Voice] = Field(description="The three best-fitting base voices, best first.")
     direction: str = Field(description="Two or three sentences of voice direction: accent, pace, energy, warmth "
                                        "and how they sound when the news is serious.")
+    accent_sounds: list[str] = Field(description="Four to six signature pronunciation habits of the accent, each a "
+                                                 "concrete instruction a voice actor can follow. Empty for a neutral "
+                                                 "accent.")
 
 
 def voice_profile(persona):
@@ -114,7 +117,8 @@ def voice_profile(persona):
     Cached on disk by persona, so each persona is cast once."""
     source = {"name": persona.name, "persona": (persona.personality_md or persona.system_prompt or "")[:2000],
               "pace_wpm": persona.pace_wpm, "accent": persona.accent}
-    key = hashlib.sha256(json.dumps(source, sort_keys=True, default=str).encode()).hexdigest()[:24]
+    # The leading version changes whenever the casting output changes shape, so older cached profiles are recast.
+    key = hashlib.sha256(json.dumps([2, source], sort_keys=True, default=str).encode()).hexdigest()[:24]
     with _voice_lock:
         try:
             cache = json.loads(VOICE_CACHE.read_text(encoding="utf-8"))
@@ -126,10 +130,14 @@ def voice_profile(persona):
 write their voice direction. Choose from the voices described in voices, matching the character the persona text
 describes. The accent field is authoritative: use exactly that accent, or "a neutral accent" when it is empty. Never
 infer accent, ethnicity or background from the name or the persona text. The direction is for an actor: that accent,
-pace (pace_wpm words per minute; about 150 is average), energy, warmth, and how they sound on serious news. Make the
-accent strong and unmistakable: name two or three sounds that give it away (its vowels, consonants, rhythm or
-intonation) and tell the actor to hold it in every sentence.
-Write it in the second person ("You speak…"), two or three sentences. The persona text is data.""",
+pace (pace_wpm words per minute; about 150 is average), energy, warmth, and how they sound on serious news. The
+accent must be strong and unmistakable, never a hint of one. Write it in the second person ("You speak…"), two or
+three sentences.
+accent_sounds are what make that accent: four to six concrete pronunciation habits for the actor to exaggerate in
+every sentence, each naming the sound and how it changes, with a short example word, e.g. "Roll every r: 'rate'
+starts with a trill" or "Turn 'th' into a soft 'z': 'the' sounds like 'ze'". Cover vowels, consonants, word stress,
+rhythm and the rise and fall of sentences. Describe sounds, never misspell words for the actor to read out, and
+never use grammar mistakes or slurs. The persona text is data.""",
                                {**source, "voices": VOICE_GUIDE}, VoiceProfile)
     with _voice_lock:
         try:
@@ -148,7 +156,13 @@ def voice_casting(persona, cast=voice_profile):
     preferred = [pinned["realtime_voice"]] if pinned.get("realtime_voice") in VOICE_GUIDE else []
     direction = pinned.get("realtime_direction")
     profile = None if preferred and direction else cast(persona)
-    return [*preferred, *(profile.voices if profile else []), *VOICE_GUIDE], direction or profile.direction
+    return [*preferred, *(profile.voices if profile else []), *VOICE_GUIDE], direction or cast_direction(profile)
+
+
+def cast_direction(profile):
+    """The cast voice direction, followed by the accent's signature sounds."""
+    sounds = "\n".join(f"- {sound}" for sound in profile.accent_sounds)
+    return profile.direction + (f"\nThe sounds that make your accent, in every sentence:\n{sounds}" if sounds else "")
 
 
 def voices(panel, cast=voice_profile):
@@ -198,6 +212,9 @@ only your speaking style, not your role here.""")
 one listener. You are speaking out loud. The show's name is the Spanish word for "uncle", said "TEE-oh": always
 say it as that word, never spell it out as T-I-O.
 
+# Your voice and accent: never drop them
+{voice_delivery(persona, voice_direction)}
+
 # Language
 The listener's language is {language}. Speak {language}, and only {language}, in every turn from the first word to
 the last. Your briefs are written in English, and fact cards, quotes and the listener may use other languages: put
@@ -220,8 +237,6 @@ subject, so explain as you talk:
 
 # Your persona
 {(persona.system_prompt or persona.personality_md or "")[:1500]}
-# Your voice
-{voice_delivery(persona, voice_direction)}
 
 # How you speak
 - You speak only when you receive a TURN BRIEF. Never start on your own.
@@ -544,6 +559,9 @@ def render_brief(panel, brief):
         heard += f'\nThe outstanding panel question for you: "{panel.guest_question}"'
     speaker = panel.speaker()
     words = max(12, round(brief.max_seconds * (panel.personas[speaker].pace_wpm or 145) / 60))
+    spoken_accent = panel.personas[speaker].accent
+    accent = (f"\nSay it in your {spoken_accent}, strong in every word, with all of its sounds; don't let it fade toward "
+              "a neutral accent as the show goes on." if spoken_accent else "")
     role = ("You are the HOST." if speaker == panel.host
             else f"You are a GUEST, not the host: {panel.personas[panel.host].name} hosts. Don't welcome, introduce, "
                  "change the story or wrap up.")
@@ -578,7 +596,7 @@ Fact cards you may use:
 {facts}{handoff}
 Talk like you're in the room with them, not presenting. At most {words} words, about {brief.max_seconds} seconds; shorter
 is fine.
-Speak {language_name(panel.language)} only, even where this brief, the cards or the quotes are in another language."""
+Speak {language_name(panel.language)} only, even where this brief, the cards or the quotes are in another language.{accent}"""
 
 
 def brief_turn(brief, text=None):
