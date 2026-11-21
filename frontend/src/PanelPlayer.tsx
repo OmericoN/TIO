@@ -164,7 +164,7 @@ export function PanelPlayer({ owner, stories, preferences, plan, recorded, origi
   async function next(body: object = {}) {
     const id = session.current, gen = generation.current
     if (!id) return
-    setStatus('Preparing a verified segment…')
+    setStatus('question' in body ? 'Finding the answer in your sources…' : 'Preparing a verified segment…')
     try {
       const result = await streamTurn(id, { ...body, generation: gen - sessionStart.current }, message => {
         if (session.current === id && generation.current === gen) setStatus(message)
@@ -203,7 +203,8 @@ export function PanelPlayer({ owner, stories, preferences, plan, recorded, origi
   const scribe = useScribe({
     modelId: 'scribe_v3_live', commitStrategy: CommitStrategy.VAD,
     microphone: { echoCancellation: true, noiseSuppression: true },
-    onPartialTranscript: ({ text }) => { if (text.trim()) interrupt() },
+    // Two words before pausing, so a cough or the speakers' own echo doesn't stop the briefing.
+    onPartialTranscript: ({ text }) => { if (text.trim().split(/\s+/).length >= 2) interrupt() },
     onCommittedTranscript: ({ text }) => { void ask(text) },
     onError: () => setStatus('Microphone unavailable. You can type your question.'),
   })

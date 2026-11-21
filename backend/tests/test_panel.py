@@ -12,7 +12,7 @@ from fastapi import HTTPException
 
 from api import panel as api
 from discussion.costs import project
-from discussion.panel import Citation, EvidenceReview, Finding, Panel, SpokenCitation, Turn, Verdict, evidence, passages, review_event, spoken_claim, spoken_text
+from discussion.panel import Citation, EvidenceReview, Finding, Panel, SpokenCitation, Turn, Verdict, evidence, passages, review_event, spoken_claim, spoken_text, figures_supported
 from discussion.personas import load_starter_personas
 from discussion.stories import Group, Groups, group_articles, load_index
 
@@ -305,3 +305,12 @@ class PrefetchTest(unittest.IsolatedAsyncioTestCase):
 
     def test_audio_tags_stay_out_of_transcripts(self):
         self.assertEqual(spoken_text("[laughs] Well, [sighs] rates rose."), "Well, rates rose.")
+
+
+class FigureTest(unittest.TestCase):
+    def test_honest_rounding_passes_but_changed_figures_do_not(self):
+        quote = "regrowth covering approximately 97.85% of the area, sales of 1,200 units in 2026, a 3,5 % rate"
+        for spoken in ("nearly 98%", "98.0%", "97.9%", "1,200 units", "1200", "2026", "3.5%"):
+            self.assertTrue(figures_supported(spoken, quote), spoken)
+        for spoken in ("99%", "2025", "4%", "100%"):
+            self.assertFalse(figures_supported(spoken, quote), spoken)
