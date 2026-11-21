@@ -20,6 +20,7 @@ class AgentPersona(BaseModel):
     formality: int | None = Field(default=None, ge=1, le=5)
     humor_level: int | None = Field(default=None, ge=1, le=5)
     pace_wpm: int | None = Field(default=None, gt=0)
+    accent: str | None = None  # how the persona sounds, e.g. "light Mexican"; the live voices follow it exactly
     catchphrases: list[str] | None = None
     do_rules: list[str] | None = None
     dont_rules: list[str] | None = None
