@@ -190,7 +190,7 @@ async function generatePlan(e) {
   const recommendation = state.recommendation;
   if (!recommendation?.article_ids.length || $("user").value !== recommendation.user_id) return;
   const out = $("results"); out.textContent = "";
-  const status = el("p", { class: "status muted", text: "Generating: fitting the list and running the tone matcher…" }); out.append(status);
+  const status = el("p", { class: "status muted", text: "Generating: fitting the list to the length and picking hosts…" }); out.append(status);
   const body = { ...recommendation, selected_article_ids: [...state.pins], excluded_article_ids: [...state.dismissed],
                  minutes: +$("gen-minutes").value || 10, mode: $("gen-mode").value };
   const t0 = performance.now();
