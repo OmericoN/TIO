@@ -668,6 +668,12 @@ async def realtime_next(key: UUID, step: RealtimeStep):
             raise HTTPException(409, "Acknowledge the active segment first.")
         said = spoken_text(step.text)
         visuals.remember(item.panel, brief.visual)
+        # Check the figures the agent actually said; a slip gets corrected on air by the next speaker.
+        slips = realtime.figure_slips(item.panel, said)
+        item.panel.correction = (f"{name} said {', '.join(slips)}, which the reporting doesn't support. Correct it "
+                                 f"with the card's figure." if slips else "")
+        if slips:
+            log.warning("Live figure slip by %s: %s | line: %s", name, slips, said)
         item.panel.heard(realtime.brief_turn(brief, said or None), cards, step.seconds or brief.max_seconds,
                          not step.interrupted)
         item.brief_pending = None

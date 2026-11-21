@@ -18,7 +18,7 @@ from pydantic import Field
 import logging
 
 from discussion import visuals
-from discussion.panel import TURN_GUIDE, Turn, model
+from discussion.panel import TURN_GUIDE, Turn, content_words, figures_supported, model, values
 
 log = logging.getLogger(__name__)
 from research.matcher import REPO_ROOT, StructuredOutput
@@ -46,7 +46,11 @@ GUEST_VOICES = ["cedar", "coral", "ash", "sage", "verse", "ballad", "shimmer", "
 
 class TurnBrief(StructuredOutput):
     goal: str = Field(description="What this turn must achieve, in one sentence.")
-    points: list[str] = Field(description="One to three points to make, as plain notes, not a script.")
+    points: list[str] = Field(description="One to three points to make, as plain notes, not a script. No figures, "
+                                          "names or dates that aren't in facts.")
+    facts: list[str] = Field(description="Zero to three factual sentences this turn states, each restating one fact "
+                                         "card's point with its exact figures, names and dates. Empty for pure "
+                                         "conversation.")
     card_ids: list[str] = Field(description="Ids of the fact cards these points rely on.")
     handoff: str | None = Field(description="Exact name of the guest to hand over to at the end, or null.")
     action: Literal["respond", "clarify", "close"]
@@ -185,8 +189,12 @@ Keep this voice consistent in every turn.
 - You can't draw or show anything yourself. Charts, photos, maps and flow charts appear on the listener's screen
   only when your brief says one is on screen; then refer to it naturally ("as you can see on the map"). Never
   promise or describe a visual that isn't there.
-- State only facts from the brief's fact cards: no figures, names or dates from anywhere else. Name the outlet when
-  giving a figure and round honestly. No investment advice.
+- Facts come only from your brief's "Facts to state" and fact cards. Say each of those facts accurately, keeping
+  every figure, name and date exactly as written; you may change the wording around them. Add no other facts: no
+  extra numbers, dates, names, places, quotes, causes or predictions, not even general knowledge. When in doubt,
+  leave it out. Reactions, opinions and questions are yours to improvise. Name the outlet when giving a figure.
+  No investment advice.
+- What the other speakers said is not a source. If they stated a figure your cards don't have, don't repeat it.
 - If the brief names someone to hand over to, end by putting a question to them by name.
 {listener}"""
 
@@ -280,6 +288,7 @@ def make_brief(panel):
         "visuals_shown_this_story": panel.visuals_shown.get(panel.story.id, []),
         "listener_wants_visuals": panel.wants_visuals,
         "visual_expected": visuals.expected(panel, pictures),
+        "correction": panel.correction or None,
     }
     instructions = TURN_GUIDE + """
 
@@ -298,8 +307,28 @@ name in handoff when the speaker should hand over. Pick max_seconds to fit the p
 up to 35 for a fuller point.""" + "\n\n" + visuals.GUIDE
     target, direction = show_step(panel)
     data["this_turn"] = direction
+    instructions += """
+
+## Staying accurate
+
+facts are the factual sentences the speaker will state: each one restates a single fact card's point, keeping its
+figures, names and dates exactly. Use at most two, and only facts not yet said in recent_turns: a turn that reacts
+to the last speaker can have none. Points are conversational notes and carry no figures, names or dates of their own.
+If correction is set, the last speaker got a figure wrong: this turn opens by putting it right in one short, friendly
+sentence with the card's figure ("Quick correction: it was 5.6%, not 14%"), then carries on."""
     brief = model().generate("realtime_brief", instructions, data, TurnBrief)
     known = {c["id"] for c in cards}
+    # Anything in the brief that the cards don't support is cut before an agent ever sees it.
+    reporting = " ".join(visuals.evidence(c) for c in cards)
+    # ...and so is any fact already said on this story, so the panel moves forward instead of repeating itself.
+    # A correction may quote the wrong figure it puts right ("5.28 million barrels, not 23") and restate the fact.
+    slipped = {str(v) for v in values(panel.correction)} if panel.correction else set()
+    corrects = lambda f: bool(slipped & {str(v) for v in values(f)})
+    facts = [f for f in brief.facts if (grounded(f, reporting + " " + panel.correction, 2) and corrects(f))
+             or (grounded(f, reporting, 2) and not panel.repeated_line(f))]
+    points = [p for p in brief.points if grounded(p, reporting, 0)]
+    if len(facts) < len(brief.facts) or len(points) < len(brief.points):
+        log.warning("Brief trimmed: dropped %s", [x for x in [*brief.facts, *brief.points] if x not in facts + points])
     visual = visuals.checked_visual(brief.visual, cards, pictures)
     if visual is None and brief.visual is not None and data["visual_expected"] == "chart, flow or map":
         # The expected visual was refused (an invented value, mixed units…): ask once more, with the reason.
@@ -307,8 +336,25 @@ up to 35 for a fuller point.""" + "\n\n" + visuals.GUIDE
     if visual is None and data["visual_expected"] == "picture":
         visual = visuals.opening_picture(panel, pictures)  # every story opens on its own photo when it has one
     return brief.model_copy(update={"card_ids": [i for i in brief.card_ids if i in known], "handoff": target,
+                                    "facts": facts, "points": points or [brief.goal],
                                     "max_seconds": max(8, min(35, brief.max_seconds)),
                                     "visual": visual})
+
+
+def grounded(text, reporting, shared_words):
+    """Whether a brief line stays within the reporting: its figures are there, and (for facts) it shares at least
+    shared_words content words with it."""
+    if not figures_supported(text, reporting):
+        return False
+    return len(content_words(text) & content_words(reporting)) >= shared_words
+
+
+def figure_slips(panel, text):
+    """Figures a speaker said that the current story's cards don't support, for an on-air correction."""
+    if panel.index >= len(panel.stories) or not values(text):
+        return []
+    reporting = " ".join(visuals.evidence(c) for c in story_cards(panel))
+    return [str(v) for v in values(text) if not figures_supported(str(v), reporting)]
 
 
 def render_brief(panel, brief):
@@ -317,7 +363,8 @@ def render_brief(panel, brief):
     facts = "\n".join(f"- [{i}] {cards[i]['point']} (" + "; ".join(
         f"{s['publisher']}: \"{s['quote'][:300]}\"" for s in cards[i]["sources"]) + ")"
         for i in brief.card_ids if i in cards) or "- none: this turn is conversation only"
-    points = "\n".join(f"- {p}" for p in brief.points)
+    points = "\n".join(f"- {p}" for p in brief.points) or "- (conversation only)"
+    stated = "\n".join(f"- {f}" for f in brief.facts) or "- none: this turn states no facts"
     handoff = (f"\nEnd by putting a question to {brief.handoff} by name." if brief.handoff
                else "\nDon't hand over to anyone; just finish your point.")
     _, direction = show_step(panel)
@@ -336,6 +383,8 @@ Your part in the show right now: {direction}
 Goal: {brief.goal}
 Points to make, in your own words:
 {points}
+Facts to state (keep every figure, name and date exactly as written; add no other facts):
+{stated}
 Fact cards you may use:
 {facts}{handoff}
 Speak for at most {brief.max_seconds} seconds."""
@@ -344,7 +393,8 @@ Speak for at most {brief.max_seconds} seconds."""
 def brief_turn(brief, text=None):
     """A Turn for the panel's history: the agent's actual words when known, otherwise the brief's points (used to
     plan the next brief ahead while the line is still being spoken)."""
-    return Turn(text=text or " ".join(brief.points), citations=[], handoff=brief.handoff, action=brief.action)
+    return Turn(text=text or " ".join([*brief.facts, *brief.points]), citations=[], handoff=brief.handoff,
+                action=brief.action)
 
 
 def context_update(panel, speaker_name=None, text=None):

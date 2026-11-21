@@ -59,10 +59,10 @@ function PlaceMap({ places }: { places: Place[] }) {
   </svg>
 }
 
-export function VisualPanel({ visual }: { visual: Visual }) {
+export function VisualPanel({ visual, leaving = false }: { visual: Visual; leaving?: boolean }) {
   const [broken, setBroken] = useState(false)
   if (visual.kind === 'picture' && (broken || !visual.picture)) return null
-  return <figure className="fact-chart" aria-label={visual.title}>
+  return <figure className="fact-chart" data-leaving={leaving || undefined} aria-label={visual.title}>
     <figcaption>{visual.title}</figcaption>
     {visual.kind === 'chart' && visual.chart && <FactChart chart={visual.chart} />}
     {visual.kind === 'flow' && visual.steps && <Flow steps={visual.steps} />}

@@ -368,6 +368,7 @@ class Panel:
     listener_style: list[str] = field(default_factory=list)  # lasting preferences the listener has shown
     visuals_shown: dict[str, list[str]] = field(default_factory=dict)  # per story, so visuals aren't repeated
     wants_visuals: bool = False  # the listener asked to see things: the producer shows visuals more generously
+    correction: str = ""  # a figure the last speaker got wrong, for the next turn to put right (realtime panel)
 
     def signature_lines(self, speaker):
         """Which persona lines this turn may draw on, and how. Nobody introduces themselves. The catchphrases are
@@ -613,7 +614,7 @@ Said just before the interruption:
         """What the next turn depends on, to tell whether a speculatively drafted turn is still the right one."""
         return (self.index, self.phase, self.speaker() if self.index < len(self.stories) else None,
                 len(self.history), self.count, self.next_guest, self.question, self.reference,
-                tuple(self.listener_style))
+                tuple(self.listener_style), self.correction)
 
     def story_tone(self):
         """The most sensitive tone among the current story's articles; it sets the voice delivery."""

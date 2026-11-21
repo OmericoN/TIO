@@ -502,7 +502,7 @@ class RealtimePanelTest(unittest.IsolatedAsyncioTestCase):
         item.touched = time.monotonic()
         api.sessions[key] = item
         self.addCleanup(api.sessions.pop, key, None)
-        briefs = iter(realtime.TurnBrief(goal=f"Goal {i}", points=[f"Point {i}"], card_ids=[], handoff=None,
+        briefs = iter(realtime.TurnBrief(goal=f"Goal {i}", points=[f"Point {i}"], card_ids=[], facts=[], handoff=None,
                                          action="respond", max_seconds=12, visual=None) for i in range(10))
         with patch.object(realtime, "make_brief", side_effect=lambda panel: next(briefs)) as plan:
             first = await api.realtime_next(key, api.RealtimeStep(generation=0))
@@ -558,7 +558,7 @@ class RealtimeRoleTest(unittest.TestCase):
         self.assertIn("Your role: GUEST EXPERT", instructions)
         self.assertIn(f"{host_name} is the host", instructions)
         panel.heard(line("Welcome. What stands out?", handoff=panel.personas[guest].name), [], 5)
-        brief = realtime.TurnBrief(goal="Answer", points=["Growth"], card_ids=[], handoff=None, action="respond",
+        brief = realtime.TurnBrief(goal="Answer", points=["Growth"], card_ids=[], facts=[], handoff=None, action="respond",
                                    max_seconds=12, visual=None)
         self.assertIn("You are a GUEST, not the host", realtime.render_brief(panel, brief))
 
@@ -579,7 +579,7 @@ class SkipRequestTest(unittest.IsolatedAsyncioTestCase):
         item.touched = time.monotonic()
         api.sessions[key] = item
         self.addCleanup(api.sessions.pop, key, None)
-        briefs = iter(realtime.TurnBrief(goal=f"Goal {i}", points=["p"], card_ids=[], handoff=None, action="respond",
+        briefs = iter(realtime.TurnBrief(goal=f"Goal {i}", points=["p"], card_ids=[], facts=[], handoff=None, action="respond",
                                          max_seconds=12, visual=None) for i in range(10))
         with patch.object(realtime, "make_brief", side_effect=lambda panel: next(briefs)) as plan:
             first = await api.realtime_next(key, api.RealtimeStep(generation=0))
@@ -671,3 +671,46 @@ class VisualRequestTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(item.panel.visuals_shown[item.panel.story.id], ["chart: Growth"])
         plain = await api.realtime_listen(key, api.ListenerRequest(generation=0, text="What does that mean?"))
         self.assertEqual(plain["intent"], "question")
+
+
+
+class AccuracyTest(unittest.TestCase):
+    def panel(self):
+        panel = fixture()
+        report = panel.story.articles[1]
+        panel.reviews[panel.story.id] = EvidenceReview(findings=[Finding(
+            point="Revenue grew 6% in the quarter", status="reported",
+            citations=[Citation(article_id=report.id, quote=report.body)])])
+        return panel
+
+    def test_brief_lines_the_reporting_doesnt_support_are_cut(self):
+        from discussion import realtime
+        panel = self.panel()
+        invented = realtime.TurnBrief(goal="Explain growth", points=["Ask what drove it", "Profit tripled to 40%"],
+                                      facts=["Revenue grew 6% in the quarter", "Revenue grew 14% in the quarter"],
+                                      card_ids=["1.1"], handoff=None, action="respond", max_seconds=15, visual=None)
+        with patch.object(realtime, "model") as provider, self.assertLogs("discussion.realtime", level="WARNING"), \
+                patch.object(realtime.visuals, "story_pictures", return_value={}):
+            provider.return_value.generate.return_value = invented
+            brief = realtime.make_brief(panel)
+        self.assertEqual(brief.facts, ["Revenue grew 6% in the quarter"])
+        self.assertEqual(brief.points, ["Ask what drove it"])
+        self.assertIn("Revenue grew 6% in the quarter", realtime.render_brief(panel, brief))
+
+    def test_a_wrong_figure_on_air_is_flagged_for_correction(self):
+        from discussion import realtime
+        panel = self.panel()
+        self.assertEqual(realtime.figure_slips(panel, "So revenue grew about 6%, right?"), [])
+        self.assertEqual(realtime.figure_slips(panel, "Revenue grew 14%, which is huge."), ["14"])
+
+
+    def test_a_correction_may_quote_the_wrong_figure(self):
+        from discussion import realtime
+        panel = self.panel()
+        panel.correction = "Ben said 14, which the reporting doesn't support. Correct it with the card's figure."
+        fixing = realtime.TurnBrief(goal="Correct it", points=["Put the figure right"],
+                                    facts=["Quick correction: revenue grew 6% in the quarter, not 14%"],
+                                    card_ids=["1.1"], handoff=None, action="respond", max_seconds=10, visual=None)
+        with patch.object(realtime, "model") as provider, patch.object(realtime.visuals, "story_pictures", return_value={}):
+            provider.return_value.generate.return_value = fixing
+            self.assertEqual(realtime.make_brief(panel).facts, fixing.facts)

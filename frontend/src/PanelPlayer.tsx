@@ -100,6 +100,24 @@ export function PanelPlayer({ owner, stories: chosenStories, preferences, record
   const [complete, setComplete] = useState(false)
   const [facts, setFacts] = useState<Card[]>([])
   const [visual, setVisual] = useState<Visual | null>(null)
+  const [visualLeaving, setVisualLeaving] = useState(false)
+  const visualTimers = useRef<number[]>([])
+
+  // A visual stays up while its line plays, then fades away a few seconds after.
+  function showVisual(next: Visual) {
+    visualTimers.current.forEach(clearTimeout)
+    visualTimers.current = []
+    setVisualLeaving(false)
+    setVisual(next)
+  }
+
+  function fadeVisual(afterMs: number) {
+    visualTimers.current.forEach(clearTimeout)
+    visualTimers.current = [
+      window.setTimeout(() => setVisualLeaving(true), afterMs),
+      window.setTimeout(() => { setVisual(null); setVisualLeaving(false) }, afterMs + 700),
+    ]
+  }
   const [sample, setSample] = useState(recorded)
   const [speaker, setSpeaker] = useState('')
   const [host, setHost] = useState('Main Host')
@@ -186,7 +204,7 @@ export function PanelPlayer({ owner, stories: chosenStories, preferences, record
         if (rt.current !== state) return
         state.skipping = result.intent === 'skip'
         if (state.skipping) setStatus(`Moving on to: ${result.headline}`)
-        if (result.visual) setVisual(result.visual)  // what they asked to see, built from the story's reporting
+        if (result.visual) showVisual(result.visual)  // what they asked to see, built from the story's reporting
         host.answer(text, result.note)
       })
     state.quiet = window.setTimeout(() => { state.listening = false; state.release?.(); state.release = undefined }, 15000)
@@ -506,7 +524,12 @@ export function PanelPlayer({ owner, stories: chosenStories, preferences, record
           save(line)
         },
         // A pause, then back to the panel; straight on after a skip, since the next story is already planned.
-        onReplyDone: () => { if (rt.current === state) { quietThenResume(state.skipping ? 600 : 3500); state.skipping = false } },
+        onReplyDone: () => {
+          if (rt.current !== state) return
+          quietThenResume(state.skipping ? 600 : 3500)
+          state.skipping = false
+          fadeVisual(4000)  // a visual the listener asked for fades once the host has talked them through it
+        },
       })))
     if (rt.current !== state) { connected.forEach(agent => agent.close()); return }
     connected.forEach(agent => state.agents.set(agent.info.id, agent))
@@ -536,7 +559,7 @@ export function PanelPlayer({ owner, stories: chosenStories, preferences, record
       story.title = turn.story
       if (previousStory.current !== turn.story) {
         setGuests([])
-        setVisual(null)  // a new story starts without the previous story's visual
+        fadeVisual(0)  // a new story starts without the previous story's visual
         if (previousStory.current) await storyCue(cueContext.current ??= new AudioContext())
         previousStory.current = turn.story
       }
@@ -544,8 +567,7 @@ export function PanelPlayer({ owner, stories: chosenStories, preferences, record
       setSpeaker(turn.speaker)
       setBegun(true)
       setFacts(turn.sources)
-      // A visual appears with the line that uses it and stays up until the next one, or the next story.
-      setVisual(previous => turn.visual ?? previous)
+      if (turn.visual) showVisual(turn.visual)
       setStories(lineup => {
         const index = lineup.findIndex(story => story.id === turn.story_id || story.title === turn.story)
         if (index >= 0) setTopic(index)
@@ -558,6 +580,7 @@ export function PanelPlayer({ owner, stories: chosenStories, preferences, record
       state.current = agent
       // The transcript appears as the agent improvises it, word by word, rather than as a finished script.
       const said: Spoken = await agent.speak(turn.brief, turn.max_seconds, text => setActive({ ...line, text }))
+      fadeVisual(3000)  // the line that used it is done
       state.current = undefined
       setSpeaker('')
       if (rt.current !== state) return
@@ -833,7 +856,7 @@ export function PanelPlayer({ owner, stories: chosenStories, preferences, record
       show(null)
       void next(finished.current)
     }} />
-    {visual && <VisualPanel key={visual.kind + visual.title} visual={visual} />}
+    {visual && <VisualPanel key={visual.kind + visual.title} visual={visual} leaving={visualLeaving} />}
     {facts.length > 0 && <Sources key={active?.id + ':' + facts[0].claim} cards={facts} compact />}
     {liveWith && <button type="button" className="button" onClick={() => void finishLive()}>Back to the briefing</button>}
     {phase === 'playing' && realtimeMode && running && <button type="button" className="button talk-button"

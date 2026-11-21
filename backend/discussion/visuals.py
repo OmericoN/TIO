@@ -74,8 +74,9 @@ pick the kind that fits:
 - chart: two to six figures measuring the same kind of thing in one unit: all growth rates, all prices, one
   measure before and after, or outlets' different numbers for the same measure. Never put different measures on
   one chart (rate-hike odds, inflation and bond yields together), never mix units, never compute values.
-- flow: a cause and effect chain, a process, a timeline or a supply chain in two to six short steps, each taken
-  from a card ("Fed signals tightening → hike odds 99% → dollar rises → 10-year yield 5.1%").
+- flow: a process, a timeline, a supply chain or a cause and effect chain in two to six short steps, each taken
+  from a card. Arrows read as "then", not "causes": only call it a chain of causes, or title it "Why…", when the
+  cards themselves say one step caused the next. A timeline is titled as one ("What happened", "What's next").
 - map: when places matter (a plant, a deal, a disaster, an election, a trade route): one to six places named on
   the cards, with their real coordinates.
 Every value, step and place must come from the fact cards.
