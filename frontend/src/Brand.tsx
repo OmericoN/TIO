@@ -1,4 +1,6 @@
 const icons = {
+  sound: 'M11 4 6 8H3v8h3l5 4V4ZM15 8a6 6 0 0 1 0 8m3-11a10 10 0 0 1 0 14',
+  muted: 'M11 4 6 8H3v8h3l5 4V4Zm4 5 6 6m0-6-6 6',
   stop: 'M6 6h12v12H6z',
   play: 'm8 5 11 7-11 7Z',
   pause: 'M6 5h4v14H6zM14 5h4v14h-4z',
