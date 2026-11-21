@@ -329,7 +329,7 @@ class HoldingTest(unittest.TestCase):
     def test_holding_lines_are_voiced_once_then_read_from_disk(self):
         panel = fixture()
         with tempfile.TemporaryDirectory() as folder, patch.object(api, "HOLDING_CACHE", Path(folder)), \
-                patch.object(api, "eleven", return_value=b"mp3") as voice, \
+                patch.object(api, "eleven", return_value=b"m" * 4096) as voice, \
                 patch.dict(os.environ, {"PANEL_VOICE_" + panel.personas[panel.host].slug.upper().replace("-", "_"): "v"}):
             first = api.holding_lines(panel)
             second = api.holding_lines(panel)

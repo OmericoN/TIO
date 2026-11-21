@@ -258,8 +258,9 @@ async def start_panel(start: Start):
     key = uuid4()
     sessions[key] = Session(panel, touched=now)
     # Voice the host's holding lines now, in the background, so they're ready before the first question.
-    sessions[key].holding = asyncio.create_task(run_in_threadpool(holding_lines, panel))
-    sessions[key].holding.add_done_callback(lambda task: task.cancelled() or task.exception())
+    if os.getenv("ELEVENLABS_API_KEY"):
+        sessions[key].holding = asyncio.create_task(run_in_threadpool(holding_lines, panel))
+        sessions[key].holding.add_done_callback(lambda task: task.cancelled() or task.exception())
     return {"id": key, "sample": (not start.test_shortlist and start.match_result is None
                                  and start.briefing_plan is None and not INDEX.exists())}
 
