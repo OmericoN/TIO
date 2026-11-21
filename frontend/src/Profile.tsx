@@ -9,7 +9,7 @@ export function loadSettings(owner: string): Settings | null {
     const saved = JSON.parse(localStorage.getItem('tio-profile-' + owner) ?? 'null')
     const prefs = saved?.preferences
     if (typeof prefs?.profile === 'string' && prefs.profile.trim() && prefs.profile.length <= 3000
-      && ['panel', 'presenter', 'live'].includes(prefs.mode) && Number.isInteger(prefs.minutes)
+      && ['panel', 'presenter', 'live', 'realtime'].includes(prefs.mode) && Number.isInteger(prefs.minutes)
       && prefs.minutes >= 1 && prefs.minutes <= 15 && typeof saved.recorded === 'boolean') {
       return { preferences: { profile: prefs.profile, mode: prefs.mode, minutes: prefs.minutes }, recorded: saved.recorded }
     }
@@ -47,7 +47,7 @@ export function Profile({ preferences, recorded, sample, online, onSave }: Props
         </select></label>}
         {!online && <p className="muted">Recorded samples are available. Start the backend to generate a personal briefing.</p>}
         <div className="format-fields">
-          <label className="field">Format<select value={draft.mode} onChange={e => setDraft({ ...draft, mode: e.target.value as Preferences['mode'] })}><option value="panel">Expert panel</option><option value="presenter">Presenter</option><option value="live">Live host (experimental)</option></select></label>
+          <label className="field">Format<select value={draft.mode} onChange={e => setDraft({ ...draft, mode: e.target.value as Preferences['mode'] })}><option value="panel">Expert panel</option><option value="presenter">Presenter</option><option value="live">Live host (experimental)</option><option value="realtime">Realtime panel (experimental)</option></select></label>
           <label className="field">Minutes<input type="number" min="1" max="15" step="1" required value={draft.minutes} onChange={e => setDraft({ ...draft, minutes: Number(e.target.value) })} /></label>
         </div>
         {sample && playSample && <p className="muted">The recorded sample uses its original script and length. Your profile, format, and duration apply to generated briefings.</p>}

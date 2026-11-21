@@ -450,3 +450,35 @@ class LiveHostTest(unittest.TestCase):
         self.assertIsNone(correction)
         _, correction = panel.audit_live("Revenue jumped 14% this quarter.")
         self.assertIn("14", correction)
+
+
+class RealtimePanelTest(unittest.IsolatedAsyncioTestCase):
+    async def test_briefs_are_planned_ahead_and_record_what_agents_said(self):
+        from discussion import realtime
+        key = uuid4()
+        item = api.Session(fixture())
+        item.touched = time.monotonic()
+        api.sessions[key] = item
+        self.addCleanup(api.sessions.pop, key, None)
+        briefs = iter(realtime.TurnBrief(goal=f"Goal {i}", points=[f"Point {i}"], card_ids=[], handoff=None,
+                                         action="respond", max_seconds=12) for i in range(10))
+        with patch.object(realtime, "make_brief", side_effect=lambda panel: next(briefs)) as plan:
+            first = await api.realtime_next(key, api.RealtimeStep(generation=0))
+            self.assertIn("Goal 0", first["brief"])
+            await item.brief_prefetch.task
+            self.assertEqual(plan.call_count, 2)                     # brief 2 planned while brief 1 is spoken
+            second = await api.realtime_next(key, api.RealtimeStep(
+                generation=0, heard=first["id"], text="So revenue is up, Leila?", seconds=9))
+            self.assertIn("Goal 1", second["brief"])
+            self.assertEqual(plan.call_count, 2)                     # served from the prefetch
+            self.assertEqual(item.panel.history[-1].text, "So revenue is up, Leila?")
+            self.assertIn("So revenue is up, Leila?", second["context"])
+            await item.brief_prefetch.task
+
+    def test_every_speaker_gets_a_distinct_voice(self):
+        from discussion import realtime
+        panel = fixture()
+        chosen = realtime.voices(panel)
+        self.assertEqual(chosen[panel.host], realtime.HOST_VOICE)
+        self.assertEqual(len(set(chosen.values())), len(chosen))
+        self.assertIn("TURN BRIEF", realtime.agent_instructions(panel, panel.host))

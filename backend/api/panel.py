@@ -26,6 +26,7 @@ from pydantic import BaseModel, Field, ValidationError, model_validator
 from discussion.panel import Panel, Turn, model, passages, review_event, select_stories, source_set, spoken_text
 from discussion.agents import DiscussionLine
 from voice.elevenlabs import request_session
+from discussion import realtime
 from discussion.matched import CompletedMatch, DiscussionPlan, InvalidMatch, matched_panel, planned_panel, test_shortlist
 from discussion.personas import AgentPersona, load_starter_personas
 from discussion.stories import INDEX, available_stories
@@ -97,6 +98,8 @@ class Session:
     pending_seconds: float = 0  # length of the pending segment's audio
     prefetch: Prefetch | None = None
     holding: asyncio.Task | None = None  # the host's pre-voiced holding lines for listener questions
+    brief_pending: tuple | None = None   # realtime panel: (brief id, TurnBrief, speaker name, cards) being spoken
+    brief_prefetch: Prefetch | None = None
 
 
 sessions: dict[UUID, Session] = {}
@@ -525,6 +528,107 @@ async def end_live(key: UUID, body: LiveEnd):
     item.panel.live_exchange([(line.role, line.text) for line in body.transcript])
     item.prefetch = None
     return {"generation": item.generation}
+
+
+class RealtimeStep(BaseModel):
+    generation: int = Field(ge=0)
+    heard: UUID | None = None
+    text: str = Field(default="", max_length=4000)      # what the agent actually said
+    seconds: float = Field(default=0, ge=0, le=300, allow_inf_nan=False)
+    interrupted: bool = False
+    listener: list[LiveLine] = Field(default_factory=list, max_length=40)  # a live exchange with the host
+
+
+@router.post("/{key}/realtime/agents")
+async def realtime_agents(key: UUID):
+    """One browser-side speech-to-speech agent per speaker: an ephemeral OpenAI Realtime secret with that persona's
+    instructions and a distinct voice. Only the host listens to the microphone."""
+    item = session(key)
+    if not os.getenv("OPENAI_API_KEY", "").strip():
+        raise HTTPException(503, "The realtime panel needs OPENAI_API_KEY.")
+    panel = item.panel
+    chosen = realtime.voices(panel)
+    try:
+        secrets = await asyncio.gather(*(run_in_threadpool(realtime.create_agent_secret, panel, i, v)
+                                         for i, v in chosen.items()))
+    except (URLError, TimeoutError, ValueError, OSError, KeyError):
+        raise HTTPException(502, "OpenAI could not start the realtime agents.") from None
+    return {"model": realtime.REALTIME_MODEL, "agents": [
+        {"id": str(i), "name": panel.personas[i].name, "role": "host" if i == panel.host else "guest",
+         "voice": v, "secret": secret} for (i, v), secret in zip(chosen.items(), secrets)]}
+
+
+def plan_turn(panel):
+    """The next brief and what the player needs to have its agent speak it. Runs in a worker thread."""
+    brief = realtime.make_brief(panel)
+    speaker = panel.speaker()
+    cards = {c["id"]: c for c in realtime.story_cards(panel)}
+    sources = [src for i in brief.card_ids if i in cards for src in cards[i]["sources"]]
+    token = uuid4()
+    return token, brief, {"id": token, "speaker_id": str(speaker), "speaker": panel.personas[speaker].name,
+                          "host": panel.personas[panel.host].name, "guests": [panel.personas[i].name for i in panel.roster],
+                          "story": panel.story.headline, "brief": realtime.render_brief(panel, brief),
+                          "max_seconds": brief.max_seconds, "sources": sources}
+
+
+def start_brief_prefetch(item):
+    """Plan the brief after the one being spoken, assuming its points get made, while the agent is still talking."""
+    token, brief, _, cards = item.brief_pending
+    panel = item.panel.fork()
+    panel.heard(realtime.brief_turn(brief), cards, brief.max_seconds * 0.8, True)
+    if panel.index == len(panel.stories):
+        return
+    item.brief_prefetch = Prefetch(token, item.generation, panel.state(),
+                                   asyncio.create_task(run_in_threadpool(plan_turn, panel)))
+    item.brief_prefetch.task.add_done_callback(lambda task: task.cancelled() or task.exception())
+
+
+@router.post("/{key}/realtime/next")
+async def realtime_next(key: UUID, step: RealtimeStep):
+    """Record what the last agent said (and any live exchange with the listener), then hand out the next brief,
+    usually already planned while that agent was speaking."""
+    item = session(key)
+    if item.busy or step.generation != item.generation:
+        raise HTTPException(409, "Turn superseded or in progress.")
+    prefetch, item.brief_prefetch = item.brief_prefetch, None
+    context = None
+    if item.brief_pending:
+        token, brief, name, cards = item.brief_pending
+        if token != step.heard:
+            raise HTTPException(409, "Acknowledge the active segment first.")
+        said = spoken_text(step.text)
+        item.panel.heard(realtime.brief_turn(brief, said or None), cards, step.seconds or brief.max_seconds,
+                         not step.interrupted)
+        item.brief_pending = None
+        context = realtime.context_update(item.panel, name, said or " ".join(brief.points))
+    if step.listener:
+        item.panel.live_exchange([(line.role, line.text) for line in step.listener])
+        prefetch = None
+    if item.panel.index == len(item.panel.stories):
+        return {"done": True, "context": context}
+    item.busy = True
+    try:
+        result = None
+        if (prefetch and prefetch.after == step.heard and prefetch.generation == item.generation
+                and prefetch.state == item.panel.state()):
+            try:
+                result = await prefetch.task
+            except (ValueError, RuntimeError, OSError) as exc:
+                log.warning("Prefetched brief failed, planning again: %s: %s", type(exc).__name__, exc)
+        if result is None:
+            result = await run_in_threadpool(plan_turn, item.panel.fork())
+        if item.generation != step.generation:
+            raise HTTPException(409, "Turn superseded.")
+        token, brief, payload = result
+        item.brief_pending = token, brief, payload["speaker"], payload["sources"]
+        start_brief_prefetch(item)
+        return {**payload, "context": context}
+    except (ValueError, RuntimeError, OSError) as exc:
+        log.warning("Realtime brief failed: %s: %s", type(exc).__name__, exc)
+        raise HTTPException(502, "The next turn could not be planned.") from None
+    finally:
+        if item.generation == step.generation:
+            item.busy = False
 
 
 @router.post("/{key}/microphone")
