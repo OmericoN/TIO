@@ -5,7 +5,6 @@ While one agent speaks, the API already prepares the next brief (see api/panel.p
 through the brief's fact cards, and every spoken line is audited afterwards against the cards."""
 
 import hashlib
-import random
 import re
 import json
 import os
@@ -41,11 +40,9 @@ This is a show, and you are a vivid character, not a neutral newsreader. Play yo
 - Contrast: sound nothing like the other speakers. Listeners should know who is talking with their eyes closed.
 - Limits that never change: the facts stay exactly as the brief and cards give them, you keep to your time, and on
   somber or serious stories you dial the energy down while keeping your character and accent."""
-# Crosstalk: the next guest almost always cuts in on the first guest's answer in a story, any later turn may get cut
-# into too, and up to MAX_CUT_CHAIN interruptions can follow one another before someone gets to finish.
-CUT_IN_CHANCE = 0.95
-LATER_CUT_IN_CHANCE = 0.5
-MAX_CUT_CHAIN = 2
+# A conversation, not a round of statements: short turns, so a story has many of them before the host closes it.
+EXCHANGES = 10
+MIN_SECONDS, MAX_SECONDS = 4, 20
 HOST_VOICE = "marin"
 GUEST_VOICES = ["cedar", "coral", "ash", "sage", "verse", "ballad", "shimmer", "echo", "alloy"]
 
@@ -54,19 +51,17 @@ class TurnBrief(StructuredOutput):
     goal: str = Field(description="What this turn must achieve, in one sentence.")
     take: str = Field(description="The speaker's own opinion for this turn, in one punchy sentence they'll argue "
                                   "for (a guest's verdict, or the host's provocation). Opinion, not new facts.")
-    points: list[str] = Field(description="One to three points to make, as plain notes, not a script. No figures, "
+    points: list[str] = Field(description="One point to make (two at most), as a plain note, not a script. No figures, "
                                           "names or dates that aren't in facts.")
-    facts: list[str] = Field(description="Zero to three factual sentences this turn states, each restating one fact "
+    facts: list[str] = Field(description="Zero or one factual sentence (two at most) this turn states, each restating one fact "
                                          "card's point with its exact figures, names and dates. Empty for pure "
                                          "conversation.")
     card_ids: list[str] = Field(description="Ids of the fact cards these points rely on.")
     handoff: str | None = Field(description="Exact name of the guest to hand over to at the end, or null.")
     action: Literal["respond", "clarify", "close"]
-    max_seconds: int = Field(description="How long the spoken line should run, 8 to 35 seconds.")
+    max_seconds: int = Field(description="How long the spoken line should run: 4 to 12 seconds for most turns, "
+                                         "up to 20 for a story's opening.")
     visual: visuals.Visual | None = Field(description="What to show on screen while this line plays, or null.")
-    cut_off: bool = Field(description="True when the next speaker should cut in on this one mid-sentence: a strong "
-                                      "disagreement coming, or this speaker going on too long. About one turn in "
-                                      "three; never the opening or a closing.")
 
 
 # OpenAI's built-in realtime voices, roughly characterised, so the model can cast each persona.
@@ -193,15 +188,17 @@ Keep this voice consistent in every turn.
 # How you speak
 - You speak only when you receive a TURN BRIEF (or, as the host, a LISTENER QUESTION). Never start on your own.
 - The panel is only the people named in your briefs. Never invent other guests or stories.
-- Deliver the brief in your own words as natural spoken English with contractions: a real person talking, not a
-  script. Keep within its time. Never read out the brief's labels and never mention the brief.
-- React to what the previous speaker said, by name, when the brief says so.
+- This is a conversation between people who know each other, not a round of statements. Talk the way people
+  actually talk: short sentences, the odd fragment or half-finished thought, "I mean", "look", "yeah, but". One or
+  two sentences is often the whole turn. Never deliver a prepared answer or tick through points.
+- Answer the last thing said first, the way you'd answer a friend: "Nah, that's not it", "Okay but why, though?",
+  "Right, and that's exactly the problem". Then make your one point, and stop. Leave something for the others.
+- Don't open with a name and don't use names in every turn; people rarely do. Don't end your turn on "what do you
+  think?" or "what's your take?". Ask a question only when you really want the answer.
+- Use the brief as what's on your mind, in your own words. Keep within its time. Never read out the brief's labels
+  and never mention the brief.
 - Have opinions. Take a clear side, say it plainly, and push back on the other speakers when you see it
   differently. Don't agree to be polite, never say "great point", and don't summarise what they said: answer it.
-- When your brief says you're cutting in, barge in hard, mid-thought, with no apology: "No, no, no—", "Come on—",
-  "Hold on, that's not—", "Wait, wait—". Go straight at their point, louder and faster for the first few words.
-- If your brief says you were cut off, you can push back first ("Let me finish—", "Can I finish?") and land your
-  point anyway, or fire straight back at whoever cut you off.
 - Don't introduce yourself or say your own name.
 - You can't draw or show anything yourself. Charts, photos, maps and flow charts appear on the listener's screen
   by themselves and speak for themselves. Talk to the listener, not about the screen: mention a visual at most
@@ -213,7 +210,7 @@ Keep this voice consistent in every turn.
   leave it out. Reactions, opinions and questions are yours to improvise. Name the outlet when giving a figure.
   No investment advice.
 - What the other speakers said is not a source. If they stated a figure your cards don't have, don't repeat it.
-- If the brief names someone to hand over to, end by putting a question to them by name.
+- The brief may say who speaks after you. You don't have to hand over to them; just talk.
 {listener}"""
 
 
@@ -257,28 +254,28 @@ def show_step(panel):
         if panel.index == 0:
             guests = " and ".join(names) or "no guests today"
             return target, (f"You're opening the show. In one sentence welcome the listener to Tío and say today's "
-                            f"guests are {guests}. Then introduce the first story and why it matters to them, and "
-                            f"ask {target} one focused question." if target else
+                            f"guests are {guests}. Then set up the first story in a sentence or two and throw it "
+                            f"to {target} with a pointed question." if target else
                             "You're opening the show: welcome the listener to Tío, then introduce the first story.")
-        return target, (f"Move to the next story with a one-sentence transition, say why it matters to the listener, "
-                        f"then ask {target} one focused question." if target else
+        return target, (f"Move to the next story in a sentence, like you would in conversation (\"Okay, different "
+                        f"thing.\"), say what happened, and throw it to {target} with a pointed question." if target else
                         "Move to the next story with a one-sentence transition and present it.")
     if speaker == panel.host and panel.phase == "clarify":
         target = others[0] if others else None
-        return target, f"Probe a specific claim or disagreement you just heard, and put it to {target}."
+        return target, f"Jump on a specific claim or disagreement you just heard, in a line, and put it to {target}."
     if speaker == panel.host and panel.phase == "resume":
         target = unheard[0] if unheard else (names[0] if names else None)
-        return target, f"Link back to the story in a few words and bring in {target}."
+        return target, f"Pick the thread back up in a few words and bring in {target}."
     if speaker == panel.host:
         sign_off = (" This is the last story: after the takeaway, thank the guests and sign off warmly in one sentence."
                     if last_story else "")
-        return None, ("Close this story in two sentences: the common ground and what's still unresolved, and one "
-                      "takeaway for the listener." + sign_off)
+        return None, ("Wrap this story in a line or two, in your own voice: what you'd take from it, or what nobody "
+                      "settled. Don't recap who said what." + sign_off)
     target = unheard[0] if unheard else None
     if target:
-        return target, (f"Answer the question you were just asked from your angle, react to what was said, and end "
-                        f"by asking {target} what they make of it.")
-    return None, "Answer the question you were just asked from your angle and react to what was said. Don't hand over."
+        return target, (f"Reply to what was just said, from your angle: agree, push back or poke a hole in it. "
+                        f"{target} talks next; you don't need to bring them in.")
+    return None, "Reply to what was just said, from your angle: agree, push back or poke a hole in it."
 
 
 def make_brief(panel):
@@ -308,8 +305,6 @@ def make_brief(panel):
         "listener_wants_visuals": panel.wants_visuals,
         "visual_expected": visuals.expected(panel, pictures),
         "correction": panel.correction or None,
-        "you_are_cutting_in": panel.cut_in,
-        "you_were_cut_off": any(line.speaker == persona.name and line.text.endswith("—") for line in panel.history[-4:]),
     }
     instructions = TURN_GUIDE + """
 
@@ -324,8 +319,15 @@ reaction: never plan a welcome, introductions, a move to another story, a wrap-u
 You are the show's producer, not the speaker. Plan the next turn for `speaker` as a brief that a voice agent will
 improvise from: a goal, one to three points as notes (not a script) and the fact card ids they rely on. Follow
 every rule above for what the turn should do. Only plan facts that are on the fact cards. Put the exact guest
-name in handoff when the speaker should hand over. Pick max_seconds to fit the point: 8 to 15 for a reaction,
-up to 35 for a fuller point.""" + "\n\n" + visuals.GUIDE
+name in handoff when the speaker should hand over. Pick max_seconds to fit the point: 4 to 8 for a reaction,
+up to 12 for a point, up to 20 only for a story's opening.
+
+## A conversation, not an interview (this overrides the rules above where they differ)
+
+Plan for people talking, not taking turns at a microphone. A turn is usually one thought: a reaction, a jab, a
+question back, a short point. Most turns state no fact at all; a turn that answers the last speaker can be just
+their reaction and a reason. One point, not a list. The host doesn't sum up or recap; a closing is a quick line
+or two, in their own voice, that moves on.""" + "\n\n" + visuals.GUIDE
     target, direction = show_step(panel)
     data["this_turn"] = direction
     instructions += """
@@ -337,14 +339,8 @@ take is the speaker's own opinion for this turn, one punchy sentence: a guest's 
 last speaker's take differs from this speaker's angle, the take disagrees with it. Never a fact the cards don't
 have, never bland ("it's complicated").
 facts are the factual sentences the speaker will state: each one restates a single fact card's point, keeping its
-figures, names and dates exactly. Use at most two, and only facts not yet said in recent_turns: a turn that reacts
+figures, names and dates exactly. Use at most one (two for a story's opening), and only facts not yet said in recent_turns: a turn that reacts
 to the last speaker can have none. Points are conversational notes and carry no figures, names or dates of their own.
-If you_are_cutting_in is true, the speaker is barging in on the last one mid-sentence: plan a short, combative
-turn (8 to 15 seconds) that attacks their point straight away. If you_were_cut_off is true, the speaker was
-interrupted last time: they may insist on finishing their point, or turn on whoever cut in. Set cut_off whenever
-the next speaker would jump in: any disagreement, a claim worth challenging, or this speaker going on too long.
-This is a lively, argumentative show: interruptions are frequent. Never on the show's opening, a story's opening
-question or a closing.
 If correction is set, the last speaker got a figure wrong: this turn opens by putting it right in one short, friendly
 sentence with the card's figure ("Quick correction: it was 5.6%, not 14%"), then carries on."""
     brief = model().generate("realtime_brief", instructions, data, TurnBrief)
@@ -366,23 +362,9 @@ sentence with the card's figure ("Quick correction: it was 5.6%, not 14%"), then
         visual = visuals.for_listener(panel, f"Show a chart, flow chart or map for this point: {brief.goal}", cards)
     if visual is None and data["visual_expected"] == "picture":
         visual = visuals.opening_picture(panel, pictures)  # every story opens on its own photo when it has one
-    # Openings and closings run to the end; the host's closing isn't cut, and no two cut-ins in a row.
-    # A cut-in slot, like the visuals: in each story the next guest usually jumps in on the first guest's answer,
-    # and the producer may add others.
-    guest_turn = panel.speaker() != panel.host and panel.phase == "guest" and target is not None
-    first_cut = not any(line.text.endswith("—") for line in panel.history)
-    chain = 0
-    for line in reversed(panel.history):  # interruptions in a row so far
-        if not line.text.endswith("—"):
-            break
-        chain += 1
-    slot = guest_turn and random.random() < (CUT_IN_CHANCE if first_cut else LATER_CUT_IN_CHANCE)
-    cut_off = ((brief.cut_off or slot) and panel.phase not in {"open", "close"} and chain < MAX_CUT_CHAIN
-               and not panel.question)
     return brief.model_copy(update={"card_ids": [i for i in brief.card_ids if i in known], "handoff": target,
-                                    "cut_off": cut_off,
                                     "facts": facts, "points": points or [brief.goal],
-                                    "max_seconds": max(8, min(35, brief.max_seconds)),
+                                    "max_seconds": max(MIN_SECONDS, min(MAX_SECONDS, brief.max_seconds)),
                                     "visual": visual})
 
 
@@ -410,8 +392,8 @@ def render_brief(panel, brief):
         for i in brief.card_ids if i in cards) or "- none: this turn is conversation only"
     points = "\n".join(f"- {p}" for p in brief.points) or "- (conversation only)"
     stated = "\n".join(f"- {f}" for f in brief.facts) or "- none: this turn states no facts"
-    handoff = (f"\nEnd by putting a question to {brief.handoff} by name." if brief.handoff
-               else "\nDon't hand over to anyone; just finish your point.")
+    handoff = (f"\n{brief.handoff} speaks after you. Bring them in only if it's natural; don't end on \"what do you "
+               f"think?\"." if brief.handoff else "")
     _, direction = show_step(panel)
     last = next((line for line in reversed(panel.history) if line.speaker != panel.personas[panel.speaker()].name), None)
     heard = f'\nJust said by {last.speaker}: "{last.text}"' if last else ""
@@ -423,24 +405,19 @@ def render_brief(panel, brief):
     on_screen = (f"\nJust appeared on the listener's screen: {visuals.describe(brief.visual)}. You may nod to it once "
                  f"in a few words (\"it's on your screen\"); don't describe it. Your point matters more."
                  if brief.visual and brief.visual.kind != "picture" else "")
-    cutting = (f"\nYou're barging in on {last.speaker} mid-sentence: cut them off hard and go straight at their "
-               f"point." if panel.cut_in and last else "")
-    me = panel.personas[panel.speaker()].name
-    if any(line.speaker == me and line.text.endswith("—") for line in panel.history[-4:]):
-        cutting += "\nYou were cut off last time: you may insist on finishing your point first."
     return f"""TURN BRIEF
-{role}{cutting}{on_screen}
+{role}{on_screen}
 Story: {panel.story.headline}{heard}
 Your part in the show right now: {direction}
-Goal: {brief.goal}
-Your take (argue for it; it's an opinion, so add no new facts): {brief.take}
-Points to make, in your own words:
+What you're after: {brief.goal}
+What you think (an opinion, so no new facts): {brief.take}
+On your mind (say it your way, or skip it if the moment's gone):
 {points}
-Facts to state (keep every figure, name and date exactly as written; add no other facts):
+Facts, only if you state any (keep every figure, name and date exactly as written; add no others):
 {stated}
 Fact cards you may use:
 {facts}{handoff}
-Speak for at most {brief.max_seconds} seconds."""
+Talk like you're in the room with them, not presenting. At most {brief.max_seconds} seconds; shorter is fine."""
 
 
 def brief_turn(brief, text=None):

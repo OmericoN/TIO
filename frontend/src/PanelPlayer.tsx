@@ -75,8 +75,6 @@ type Props = {
   onClose: () => void
 }
 
-// How likely each other panelist is to react over a line (short asides, never facts).
-const REACTION_CHANCE = 0.45
 
 async function postJson<T>(url: string, body: object): Promise<T> {
   const response = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
@@ -106,14 +104,6 @@ export function PanelPlayer({ owner, stories: chosenStories, preferences, record
   const [visualLeaving, setVisualLeaving] = useState(false)
   const [visualPinned, setVisualPinned] = useState(false)
   const [visualHistory, setVisualHistory] = useState<Visual[]>([])
-  const [reactions, setReactions] = useState<{ id: number; who: string; text: string }[]>([])
-
-  // A panelist's aside, shown briefly next to the conversation while it's heard.
-  function showReaction(who: string, text: string) {
-    const id = Math.random()
-    setReactions(shown => [...shown.slice(-2), { id, who, text }])
-    window.setTimeout(() => setReactions(shown => shown.filter(r => r.id !== id)), 2600)
-  }
   const visualTimers = useRef<number[]>([])
   const pinnedRef = useRef(false)
 
@@ -178,7 +168,7 @@ export function PanelPlayer({ owner, stories: chosenStories, preferences, record
   const rt = useRef<{ agents: Map<string, RealtimeAgent>; host?: RealtimeAgent; microphone: MediaStream | null;
     current?: RealtimeAgent; listening: boolean; exchange: { role: 'listener' | 'host'; text: string }[];
     quiet?: number; duckTimer?: number; release?: () => void; talking?: boolean; generation: number;
-    skipping?: boolean; cutting?: RealtimeAgent; cutTimeout?: number } | null>(null)
+    skipping?: boolean } | null>(null)
 
   function resumePanel(state: NonNullable<typeof rt.current>) {
     clearTimeout(state.quiet)
@@ -197,7 +187,6 @@ export function PanelPlayer({ owner, stories: chosenStories, preferences, record
       state.listening = true
       clearTimeout(state.quiet)
       state.current?.cancel()
-      state.cutting?.cancel()
       state.host.startListening()
       setStatus('Listening… release to ask')
     } else {
@@ -216,7 +205,6 @@ export function PanelPlayer({ owner, stories: chosenStories, preferences, record
     clearTimeout(state.quiet)
     state.current?.duck(1)
     state.current?.cancel()
-    state.cutting?.cancel()
     state.exchange.push({ role: 'listener', text })
     save({ id: crypto.randomUUID(), speaker: 'Listener', text })
     setStatus('Answering your question…')
@@ -572,7 +560,7 @@ export function PanelPlayer({ owner, stories: chosenStories, preferences, record
     while (rt.current === state) {
       type Turn = { done?: boolean; context?: string | null; id: string; speaker_id: string; speaker: string;
         guests: string[]; story: string; story_id: string; brief: string; max_seconds: number; sources: Segment['sources']
-        visual: Visual | null; cut_off: boolean }
+        visual: Visual | null }
       const turn = await post<Turn>(`/${id}/realtime/next`, step)
       if (rt.current !== state) return
       if (turn.context) state.host?.context(turn.context)
@@ -604,56 +592,15 @@ export function PanelPlayer({ owner, stories: chosenStories, preferences, record
         guests: turn.guests, text: '…', sources: turn.sources }
       setActive(line)
       state.current = agent
-      // Cut-ins: when the producer planned that the next speaker jumps in on this one, the loop moves on partway
-      // through this line; the next voice starts over it, and this one is cut off a beat later.
-      let soFar = '', startedAt = performance.now(), cutTimer = 0
-      const asideTimers: number[] = []
-      let cut = () => {}
-      const cutting = new Promise<'cut'>(resolve => { cut = () => resolve('cut') })
       // The transcript appears as the agent improvises it, word by word, rather than as a finished script.
-      const speaking = agent.speak(turn.brief, turn.max_seconds, text => { soFar = text; setActive({ ...line, text }) }, () => {
-        startedAt = performance.now()
-        // Crosstalk: the others now and then react over this line ("Mm-hmm", "Oh, come on"), in character.
-        const listeners = [...state.agents.values()].filter(other => other !== agent && other !== state.cutting)
-        for (const other of listeners) {
-          if (Math.random() > REACTION_CHANCE) continue
-          const at = turn.max_seconds * (0.25 + Math.random() * 0.55) * 1000
-          asideTimers.push(window.setTimeout(() => {
-            if (rt.current !== state || state.listening || state.current !== agent) return
-            other.react(`${turn.speaker} is saying: "${soFar.slice(-220)}"`, text => showReaction(other.info.name, text))
-          }, at))
-        }
-        const victim = state.cutting
-        if (victim) {  // this line is cutting in on the last one: both talk at once for a second, then they give up
-          state.cutting = undefined
-          clearTimeout(state.cutTimeout)
-          window.setTimeout(() => {
-            victim.cancel()
-            // Half the time the one cut off protests on the way out.
-            if (Math.random() < 0.5) window.setTimeout(() => victim.react(
-              `${turn.speaker} just talked over you before you could finish. Protest in two or three words ("Hey, let me—").`,
-              text => showReaction(victim.info.name, text)), 150)
-          }, 1800)
-        }
-        // Cut early: a third to a half of the way into the line, before they've landed their point.
-        if (turn.cut_off) cutTimer = window.setTimeout(cut, Math.max(3, turn.max_seconds * (0.3 + Math.random() * 0.2)) * 1000)
-      })
-      const outcome = await Promise.race([speaking, cutting])
-      clearTimeout(cutTimer)
-      asideTimers.forEach(clearTimeout)
-      const cutOff = outcome === 'cut' && !state.listening
-      const said: Spoken = outcome === 'cut' ? { text: soFar, seconds: (performance.now() - startedAt) / 1000, interrupted: false } : outcome
-      if (cutOff) {
-        state.cutting = agent  // still talking until the next voice is audible (or three seconds pass)
-        state.cutTimeout = window.setTimeout(() => { agent.cancel(); if (state.cutting === agent) state.cutting = undefined }, 3000)
-      } else if (outcome === 'cut') agent.cancel()
+      const said = await agent.speak(turn.brief, turn.max_seconds, text => setActive({ ...line, text }))
       fadeVisual(3000)  // the line that used it is done
       state.current = undefined
       setSpeaker('')
       if (rt.current !== state) return
       if (said.text) {
         for (const other of state.agents.values()) {
-          if (other !== agent) other.context(`ON AIR (not addressed to you unless named): ${turn.speaker} said: "${said.text}${cutOff ? '—" (cut off mid-sentence)' : '"'}`)
+          if (other !== agent) other.context(`ON AIR (not addressed to you unless named): ${turn.speaker} said: "${said.text}"`)
         }
         const spoken = { ...line, text: said.text }
         setActive(spoken)
@@ -662,7 +609,7 @@ export function PanelPlayer({ owner, stories: chosenStories, preferences, record
       }
       if (said.interrupted || state.listening) { state.listening = true; await waitForListener() }
       step = { generation: gen - sessionStart.current, heard: turn.id, text: said.text, seconds: said.seconds,
-        interrupted: said.interrupted, cut_off: cutOff, listener: state.exchange.splice(0) }
+        interrupted: said.interrupted, listener: state.exchange.splice(0) }
     }
   }
 
@@ -923,9 +870,6 @@ export function PanelPlayer({ owner, stories: chosenStories, preferences, record
       show(null)
       void next(finished.current)
     }} />
-    {reactions.length > 0 && <ul className="panel-reactions" aria-live="polite">
-      {reactions.map(reaction => <li key={reaction.id}><strong>{reaction.who}</strong> {reaction.text}</li>)}
-    </ul>}
     {visual && <VisualPanel key={visual.kind + visual.title} visual={visual} leaving={visualLeaving}
       spoken={active?.text ?? ''} pinned={visualPinned} onPin={pinVisual} />}
     <VisualHistory visuals={visualHistory} current={visual} onOpen={earlier => { showVisual(earlier); pinVisual(true) }} />

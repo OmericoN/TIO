@@ -676,11 +676,3 @@ a { text-underline-offset: .2em; }
 .visual-kind { margin-right: 5px; opacity: .8; }
 .visual-flow li[data-state="selected"] button { box-shadow: 0 0 0 1px var(--gold); }
 .fact-chart .chart-row[data-state="selected"] .chart-bar { stroke: var(--ink); stroke-width: 1; }
-
-/* Asides: panelists reacting over each other, shown briefly while they're heard. */
-.panel-reactions { list-style: none; margin: 0 auto 10px; padding: 0; max-width: 560px; display: flex; flex-wrap: wrap; gap: 6px; }
-.panel-reactions li { padding: 4px 10px; border-radius: 999px; font-size: 13px; color: #f5f4df; background: rgb(255 255 255 / 8%);
-  border: 1px solid rgb(255 255 255 / 14%); animation: reaction-pop 2.6s ease-out both; }
-.panel-reactions strong { font-weight: 600; color: var(--gold); margin-right: 4px; }
-@keyframes reaction-pop { 0% { opacity: 0; transform: translateY(4px); } 10%, 80% { opacity: 1; transform: none; } 100% { opacity: 0; } }
-@media (prefers-reduced-motion: reduce) { .panel-reactions li { animation: none; } }
