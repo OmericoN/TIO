@@ -111,7 +111,34 @@ export function PanelPlayer({ owner, stories, preferences, plan, recorded, origi
   const realtimeMode = !recorded  // whatever the saved format: a host plus guests, each a separate live voice
   const rt = useRef<{ agents: Map<string, RealtimeAgent>; host?: RealtimeAgent; microphone: MediaStream | null;
     current?: RealtimeAgent; listening: boolean; exchange: { role: 'listener' | 'host'; text: string }[];
-    quiet?: number; duckTimer?: number; release?: () => void } | null>(null)
+    quiet?: number; duckTimer?: number; release?: () => void; talking?: boolean } | null>(null)
+
+  function resumePanel(state: NonNullable<typeof rt.current>) {
+    clearTimeout(state.quiet)
+    state.listening = false
+    state.release?.()
+    state.release = undefined
+    setStatus('')
+  }
+
+  // Hold to talk: whoever is speaking stops, the microphone opens, and on release the host hears the question.
+  function holdToTalk(down: boolean) {
+    const state = rt.current
+    if (!state?.host || state.talking === down) return
+    state.talking = down
+    if (down) {
+      state.listening = true
+      clearTimeout(state.quiet)
+      state.current?.cancel()
+      state.host.startListening()
+      setStatus('Listening… release to ask')
+    } else {
+      state.host.stopListening()
+      setStatus('Thinking about your question…')
+      clearTimeout(state.duckTimer)
+      state.duckTimer = window.setTimeout(() => resumePanel(state), 8000)  // nothing transcribed: carry on
+    }
+  }
 
   // The listener asked something (spoken or typed): stop whoever is talking and have the host answer live.
   function listenerAsks(text: string) {
@@ -377,18 +404,11 @@ export function PanelPlayer({ owner, stories, preferences, plan, recorded, origi
     const hostInfo = agents.find(agent => agent.role === 'host')!
     const connected = await Promise.all(agents.map(info => RealtimeAgent.connect(info, model,
       info.role === 'host' ? microphone : null, info.role !== 'host' ? {} : {
-        // A sound only lowers the speaker's volume. It counts as the listener only once its transcript has real
-        // words, so noise or the speakers' own echo can't stop the panel or set the host talking.
-        onListenerStart: () => {
-          if (rt.current !== state) return
-          state.current?.duck(0.3)
-          clearTimeout(state.duckTimer)
-          state.duckTimer = window.setTimeout(() => state.current?.duck(1), 2500)
-        },
+        // Push-to-talk: the microphone is only open while the talk button is held, so this is always the listener.
         onListenerText: text => {
           if (rt.current !== state) return
           clearTimeout(state.duckTimer)
-          if (text.split(/\s+/).filter(word => /\w/.test(word)).length < 2) { state.current?.duck(1); return }
+          if (!text.split(/\s+/).some(word => /\w/.test(word))) { resumePanel(state); return }
           listenerAsks(text)
         },
         onReply: text => {
@@ -406,7 +426,7 @@ export function PanelPlayer({ owner, stories, preferences, plan, recorded, origi
     state.host = state.agents.get(hostInfo.id)
     setHost(hostInfo.name)
     console.info('Realtime panel voices', Object.fromEntries(agents.map(a => [a.name, a.voice])))
-    const liveStatus = `Live · ${agents.length} realtime ${agents.length === 1 ? 'voice' : 'voices'}${microphone ? ' · just speak to join in' : ''}`
+    const liveStatus = `Live · ${agents.length} realtime ${agents.length === 1 ? 'voice' : 'voices'}${microphone ? ' · hold the talk button to join in' : ''}`
     setStatus(liveStatus)
     const waitForListener = () => state.listening
       ? new Promise<void>(resolve => { state.release = resolve })
@@ -654,6 +674,12 @@ export function PanelPlayer({ owner, stories, preferences, plan, recorded, origi
       <Sources cards={active.sources} />
     </div>}
     {liveWith && <button type="button" className="button" onClick={() => void finishLive()}>Back to the briefing</button>}
+    {realtimeMode && running && <button type="button" className="button talk-button"
+      onPointerDown={event => { event.currentTarget.setPointerCapture(event.pointerId); holdToTalk(true) }}
+      onPointerUp={() => holdToTalk(false)} onPointerCancel={() => holdToTalk(false)}
+      onKeyDown={event => { if ((event.key === ' ' || event.key === 'Enter') && !event.repeat) { event.preventDefault(); holdToTalk(true) } }}
+      onKeyUp={event => { if (event.key === ' ' || event.key === 'Enter') { event.preventDefault(); holdToTalk(false) } }}>
+      Hold to talk</button>}
     {running && !recorded && <form className="flex flex-wrap gap-2" onSubmit={e => {
       e.preventDefault()
       const showing = showSession.current

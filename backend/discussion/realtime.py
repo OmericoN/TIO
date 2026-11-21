@@ -79,10 +79,9 @@ def create_agent_secret(panel, persona_id, voice):
     audio = {"output": {"voice": voice}}
     if persona_id == panel.host:  # only the host listens to the microphone
         audio["input"] = {"transcription": {"model": "gpt-4o-mini-transcribe"},
-                          # Never reply or stop on its own: background noise or the speakers' own echo would set it
-                          # off with no context. The player decides, once a real question has been transcribed.
-                          "turn_detection": {"type": "semantic_vad", "eagerness": "low",
-                                             "create_response": False, "interrupt_response": False}}
+                          # Push-to-talk: no voice detection at all. The player opens the microphone only while the
+                          # listener holds the talk button, then commits that audio for transcription.
+                          "turn_detection": None}
     else:
         audio["input"] = {"turn_detection": None}
     body = {"session": {"type": "realtime", "model": REALTIME_MODEL,
@@ -97,6 +96,46 @@ def create_agent_secret(panel, persona_id, voice):
 def story_cards(panel):
     number = panel.index + 1
     return [c for c in panel.fact_cards() if c["story"] == number]
+
+
+def show_step(panel):
+    """The fixed shape of the show, decided by code rather than the model: who this turn addresses next and what the
+    turn is for. Tio opens and introduces the panel, each guest answers in turn, Tio probes and closes each story,
+    and Tio signs off after the last one."""
+    speaker = panel.speaker()
+    names = [panel.personas[i].name for i in panel.roster]
+    unheard = [panel.personas[i].name for i in panel.roster if i not in panel.guest_turns and i != speaker]
+    others = [n for n in names if n != panel.personas[speaker].name]
+    last_story = panel.index == len(panel.stories) - 1
+    if panel.question:
+        return None, "Answer the listener's question directly, then hand back to the discussion."
+    if speaker == panel.host and panel.phase == "open":
+        target = unheard[0] if unheard else (names[0] if names else None)
+        if panel.index == 0:
+            guests = " and ".join(names) or "no guests today"
+            return target, (f"You're opening the show. In one sentence welcome the listener to TIO and say today's "
+                            f"guests are {guests}. Then introduce the first story and why it matters to them, and "
+                            f"ask {target} one focused question." if target else
+                            "You're opening the show: welcome the listener to TIO, then introduce the first story.")
+        return target, (f"Move to the next story with a one-sentence transition, say why it matters to the listener, "
+                        f"then ask {target} one focused question." if target else
+                        "Move to the next story with a one-sentence transition and present it.")
+    if speaker == panel.host and panel.phase == "clarify":
+        target = others[0] if others else None
+        return target, f"Probe a specific claim or disagreement you just heard, and put it to {target}."
+    if speaker == panel.host and panel.phase == "resume":
+        target = unheard[0] if unheard else (names[0] if names else None)
+        return target, f"Link back to the story in a few words and bring in {target}."
+    if speaker == panel.host:
+        sign_off = (" This is the last story: after the takeaway, thank the guests and sign off warmly in one sentence."
+                    if last_story else "")
+        return None, ("Close this story in two sentences: the common ground and what's still unresolved, and one "
+                      "takeaway for the listener." + sign_off)
+    target = unheard[0] if unheard else None
+    if target:
+        return target, (f"Answer the question you were just asked from your angle, react to what was said, and end "
+                        f"by asking {target} what they make of it.")
+    return None, "Answer the question you were just asked from your angle and react to what was said. Don't hand over."
 
 
 def make_brief(panel):
@@ -119,6 +158,11 @@ def make_brief(panel):
     }
     instructions = TURN_GUIDE + """
 
+## The show's structure (fixed)
+
+data.this_turn says exactly what this turn is for in the show's running order. Plan the brief to do that and only
+that, with handoff to the person it names.
+
 ## Your job here
 
 You are the show's producer, not the speaker. Plan the next turn for `speaker` as a brief that a voice agent will
@@ -126,9 +170,11 @@ improvise from: a goal, one to three points as notes (not a script) and the fact
 every rule above for what the turn should do. Only plan facts that are on the fact cards. Put the exact guest
 name in handoff when the speaker should hand over. Pick max_seconds to fit the point: 8 to 15 for a reaction,
 up to 35 for a fuller point."""
+    target, direction = show_step(panel)
+    data["this_turn"] = direction
     brief = model().generate("realtime_brief", instructions, data, TurnBrief)
     known = {c["id"] for c in cards}
-    return brief.model_copy(update={"card_ids": [i for i in brief.card_ids if i in known],
+    return brief.model_copy(update={"card_ids": [i for i in brief.card_ids if i in known], "handoff": target,
                                     "max_seconds": max(8, min(35, brief.max_seconds))})
 
 
@@ -139,9 +185,12 @@ def render_brief(panel, brief):
         f"{s['publisher']}: \"{s['quote'][:300]}\"" for s in cards[i]["sources"]) + ")"
         for i in brief.card_ids if i in cards) or "- none: this turn is conversation only"
     points = "\n".join(f"- {p}" for p in brief.points)
-    handoff = f"\nEnd by putting a question to {brief.handoff} by name." if brief.handoff else ""
+    handoff = (f"\nEnd by putting a question to {brief.handoff} by name." if brief.handoff
+               else "\nDon't hand over to anyone; just finish your point.")
+    _, direction = show_step(panel)
     return f"""TURN BRIEF
 Story: {panel.story.headline}
+Your part in the show right now: {direction}
 Goal: {brief.goal}
 Points to make, in your own words:
 {points}

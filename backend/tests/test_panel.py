@@ -482,3 +482,21 @@ class RealtimePanelTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(chosen[panel.host], realtime.HOST_VOICE)
         self.assertEqual(len(set(chosen.values())), len(chosen))
         self.assertIn("TURN BRIEF", realtime.agent_instructions(panel, panel.host))
+
+
+class ShowStructureTest(unittest.TestCase):
+    def test_tio_opens_guests_answer_in_turn_and_tio_closes(self):
+        from discussion import realtime
+        panel = fixture()
+        first, second = (panel.personas[i].name for i in panel.roster)
+        target, direction = realtime.show_step(panel)
+        self.assertEqual(panel.speaker(), panel.host)
+        self.assertEqual(target, first)
+        self.assertIn("opening the show", direction)
+        self.assertIn(second, direction)                              # both guests are introduced
+        panel.heard(line(f"Welcome! {first}, what stands out?", handoff=first), [], 10)
+        target, direction = realtime.show_step(panel)
+        self.assertEqual((panel.personas[panel.speaker()].name, target), (first, second))
+        panel.heard(line(f"Growth is real. {second}?", handoff=second), [], 10)
+        target, _ = realtime.show_step(panel)
+        self.assertEqual((panel.personas[panel.speaker()].name, target), (second, None))

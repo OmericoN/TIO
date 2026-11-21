@@ -24,6 +24,8 @@ export class RealtimeAgent {
   private replying = new Set<string>()
   readonly audio = new Audio()
 
+  private microphone: MediaStream | null = null
+
   private constructor(readonly info: AgentInfo, private pc: RTCPeerConnection, private handlers: Handlers) {}
 
   static async connect(info: AgentInfo, model: string, microphone: MediaStream | null, handlers: Handlers = {}) {
@@ -31,7 +33,10 @@ export class RealtimeAgent {
     const agent = new RealtimeAgent(info, pc, handlers)
     agent.audio.autoplay = true
     pc.ontrack = event => { agent.audio.srcObject = event.streams[0] }
-    if (microphone) microphone.getAudioTracks().forEach(track => pc.addTrack(track, microphone))
+    if (microphone) {
+      agent.microphone = microphone
+      microphone.getAudioTracks().forEach(track => { track.enabled = false; pc.addTrack(track, microphone) })
+    }
     else pc.addTransceiver('audio', { direction: 'recvonly' })
     agent.channel = pc.createDataChannel('oai-events')
     agent.channel.onmessage = message => agent.receive(JSON.parse(message.data))
@@ -119,6 +124,18 @@ export class RealtimeAgent {
   answer(question: string) {
     this.send({ type: 'response.create', response: { instructions:
       `LISTENER QUESTION: "${question}". Answer them now, following your instructions and your latest CONTEXT UPDATE.` } })
+  }
+
+  /** Push-to-talk: open the microphone and start a fresh recording. */
+  startListening() {
+    this.send({ type: 'input_audio_buffer.clear' })
+    this.microphone?.getAudioTracks().forEach(track => { track.enabled = true })
+  }
+
+  /** Push-to-talk released: close the microphone and send what was said for transcription. */
+  stopListening() {
+    this.microphone?.getAudioTracks().forEach(track => { track.enabled = false })
+    this.send({ type: 'input_audio_buffer.commit' })
   }
 
   /** Lowers or restores this agent's volume, e.g. while checking whether a sound is the listener talking. */
