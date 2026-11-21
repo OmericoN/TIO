@@ -52,7 +52,6 @@ export function NewsWorkspace({ owner, onboarding, listenerId }: { owner: string
   const interests = [...choices.topics, choices.otherInterests.trim()].filter(Boolean)
   const preferences: Preferences = {
     profile: interests.length ? `Explain what changed and why it matters to a listener interested in ${interests.join(', ')}.` : savedSettings?.preferences.profile ?? defaultProfile,
-    mode: savedSettings?.preferences.mode ?? 'panel',
     minutes: savedSettings?.preferences.minutes ?? 4,
   }
   const [selectedIds, setSelectedIds] = useState<string[]>([])

@@ -147,10 +147,7 @@ with sync_playwright() as p:
         page.get_by_role('button', name='Select article:', exact=False).first.click()
         page.get_by_role('button', name='Start agent discussion').click()
         expect(page.get_by_label('Playback')).to_have_count(0)
-        if preview:
-            expect(page.get_by_label('Format')).to_have_count(0)
-        else:
-            page.get_by_label('Format').select_option('presenter')
+        expect(page.get_by_label('Format')).to_have_count(0)
         slider = page.get_by_role('slider', name='Expert participants')
         expect(slider).to_have_attribute('aria-disabled', 'false')
         x, y = point(slider, 90, lower=True)
@@ -177,7 +174,7 @@ with sync_playwright() as p:
             expect(page.get_by_role('dialog').get_by_role('status')).to_have_text('Test endpoint reached')
             assert starts[0]['mode'] == 'panel' and starts[0]['expert_count'] == 4
             page.keyboard.press('Escape')
-        print(f'{"Recorded preview" if preview else "Presenter session"}: expert dial, thick progress and leading tick, focus cue and format handling passed', flush=True)
+        print(f'{"Recorded preview" if preview else "Panel session"}: expert dial, thick progress and leading tick, focus cue and format handling passed', flush=True)
         page.close()
 
     for cancel in (True, False):

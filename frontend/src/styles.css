@@ -208,7 +208,6 @@ a { text-underline-offset: .2em; }
 .skip-link { position: absolute; top: 5px; left: 5px; padding: 10px; background: var(--paper); z-index: 6; transform: translateY(-150%); }
 .skip-link:focus { transform: translateY(0); }
 .setup-fields { display: grid; grid-template-columns: minmax(0, 1.7fr) minmax(230px, 1fr); gap: 24px; margin: 24px 0 18px; }
-.briefing-setup-options { display: flex; flex-wrap: wrap; justify-content: center; gap: 12px; margin-bottom: 12px; }
 .field, .auth-form label { font-size: 14px; font-weight: 500; }
 .field :is(input, textarea, select), .form-field {
   display: block; margin-top: 6px; width: 100%; min-width: 0; min-height: 44px; border: 1px solid #b8bdae; border-radius: 7px;

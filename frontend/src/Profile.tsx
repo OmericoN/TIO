@@ -10,9 +10,9 @@ export function loadSettings(owner: string): Settings | null {
     const saved = JSON.parse(localStorage.getItem('tio-profile-' + owner) ?? 'null')
     const prefs = saved?.preferences
     if (typeof prefs?.profile === 'string' && prefs.profile.trim() && prefs.profile.length <= 3000
-      && ['panel', 'presenter', 'live', 'realtime'].includes(prefs.mode) && Number.isInteger(prefs.minutes)
+      && Number.isInteger(prefs.minutes)
       && prefs.minutes >= 1 && prefs.minutes <= 15 && typeof saved.recorded === 'boolean') {
-      return { preferences: { profile: prefs.profile, mode: prefs.mode, minutes: prefs.minutes }, recorded: saved.recorded }
+      return { preferences: { profile: prefs.profile, minutes: prefs.minutes }, recorded: saved.recorded }
     }
   } catch { /* Use default preferences when saved settings are unavailable. */ }
   return null

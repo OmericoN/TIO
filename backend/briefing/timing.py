@@ -32,21 +32,20 @@ class PlannedStory(BaseModel):
     estimated_seconds: int = Field(gt=0, le=300)
 
 
-def story_seconds(story: Story, wpm: float = DEFAULT_WPM, mode: str = "presenter") -> float:
+def story_seconds(story: Story, wpm: float = DEFAULT_WPM) -> float:
     seconds = BASE_S + PER_SOURCE_S * max(0, len(story.outlets) - 1)
     supported = MATERIAL_SHARE * story.words / max(wpm, 1) * 60
     seconds = max(MIN_S, min(MAX_S, min(seconds, supported)))
-    return seconds * (DEBATE_FACTOR if mode == "debate" else 1.0)
+    return seconds * DEBATE_FACTOR
 
 
-def total_seconds(stories: list[Story], wpm: float = DEFAULT_WPM, mode: str = "presenter") -> float:
+def total_seconds(stories: list[Story], wpm: float = DEFAULT_WPM) -> float:
     if not stories:
         return 0.0
-    return OVERHEAD_S + sum(story_seconds(s, wpm, mode) + TRANSITION_S for s in stories)
+    return OVERHEAD_S + sum(story_seconds(s, wpm) + TRANSITION_S for s in stories)
 
 
-def fit(stories: list[Story], minutes: float, wpm: float = DEFAULT_WPM,
-        mode: str = "presenter") -> tuple[list[Story], list[Story]]:
+def fit(stories: list[Story], minutes: float, wpm: float = DEFAULT_WPM) -> tuple[list[Story], list[Story]]:
     """Selected stories first (always kept), then the rest in order while they fit. Returns (kept, dropped)."""
     budget = minutes * 60
     ordered = [s for s in stories if s.selected] + [s for s in stories if not s.selected]
@@ -54,7 +53,7 @@ def fit(stories: list[Story], minutes: float, wpm: float = DEFAULT_WPM,
     dropped: list[Story] = []
     total = OVERHEAD_S
     for story in ordered:
-        cost = story_seconds(story, wpm, mode) + TRANSITION_S
+        cost = story_seconds(story, wpm) + TRANSITION_S
         if story.selected or total + cost <= budget or (total < budget and total + cost <= budget * OVERSHOOT):
             kept.append(story)
             total += cost

@@ -6,7 +6,7 @@ Use this framework for briefing scripts and researched follow-up answers.
 
 - Group coverage of the same event into one story. Treat syndicated copies as one source.
 - Keep the day's essential stories across briefings. Use the listener profile to choose the remaining stories and vary their order, depth, and length.
-- Choose a host persona and presentation format separately. Presenter and debate formats use the same standards for evidence.
+- Tio moderates the panel. Every expert uses the same standards for evidence.
 
 ## Write for listening
 

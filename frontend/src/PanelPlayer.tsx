@@ -87,7 +87,6 @@ export function PanelPlayer({ owner, stories: chosenStories, preferences, record
   const [status, setStatus] = useState('')
   const [phase, setPhase] = useState<'setup' | 'confirming' | 'playing'>('setup')
   const [minutes, setMinutes] = useState(preferences.minutes)
-  const [mode, setMode] = useState(preferences.mode)
   const [experts, setExperts] = useState(2)
   const confirmed = useRef(false)
   const [active, setActive] = useState<Segment | null>(null)
@@ -121,24 +120,16 @@ export function PanelPlayer({ owner, stories: chosenStories, preferences, record
   const live = useRef<{ gen: number; transcript: { role: 'listener' | 'host'; text: string }[]; conversation?: Conversation;
     idle?: number; finishing?: boolean; micWasOn: boolean } | null>(null)
   const [liveWith, setLiveWith] = useState('')
-  // Experimental live host: the whole briefing runs over one speech-to-speech session, fed fact cards by the backend.
-  const liveShow = false  // this branch runs every briefing as the realtime panel
-  // Experimental realtime panel: a speech-to-speech agent per speaker, each speaking from briefs the backend plans.
-  // On this experiment branch every generated briefing is live: panel and presenter formats both run as realtime
-  // agents (presenter = the host alone). Only the 'live' format keeps its single ElevenLabs session, and the
-  // recorded sample still plays its fixed audio.
-  const realtimeMode = !recorded  // whatever the saved format: a host plus guests, each a separate live voice
+  const realtimeMode = !recorded
   const rt = useRef<{ agents: Map<string, RealtimeAgent>; host?: RealtimeAgent; microphone: MediaStream | null;
-    current?: RealtimeAgent; listening: boolean; exchange: { role: 'listener' | 'host'; text: string }[];
-    quiet?: number; duckTimer?: number; release?: () => void; talking?: boolean; generation: number;
-    skipping?: boolean } | null>(null)
+    current?: RealtimeAgent; listening: boolean; questions: string[];
+    transcriptionTimer?: number; release?: () => void; talking?: boolean } | null>(null)
 
   function resumePanel(state: NonNullable<typeof rt.current>) {
-    clearTimeout(state.quiet)
+    clearTimeout(state.transcriptionTimer)
     state.listening = false
     state.release?.()
     state.release = undefined
-    setStatus('')
   }
 
   // Hold to talk: whoever is speaking stops, the microphone opens, and on release the host hears the question.
@@ -148,45 +139,28 @@ export function PanelPlayer({ owner, stories: chosenStories, preferences, record
     state.talking = down
     if (down) {
       state.listening = true
-      clearTimeout(state.quiet)
+      clearTimeout(state.transcriptionTimer)
       state.current?.cancel()
       state.host.startListening()
       setStatus('Listening… release to ask')
     } else {
       state.host.stopListening()
       setStatus('Thinking about your question…')
-      clearTimeout(state.duckTimer)
-      state.duckTimer = window.setTimeout(() => resumePanel(state), 8000)  // nothing transcribed: carry on
+      clearTimeout(state.transcriptionTimer)
+      state.transcriptionTimer = window.setTimeout(() => resumePanel(state), 8000)  // nothing transcribed: carry on
     }
   }
 
-  // The listener asked something (spoken or typed): stop whoever is talking and have the host answer live.
   function listenerAsks(text: string) {
     const state = rt.current
     if (!state?.host) return
-    state.listening = true
-    clearTimeout(state.quiet)
-    state.current?.duck(1)
+    state.questions.push(text.slice(0, 2000))
     state.current?.cancel()
-    state.exchange.push({ role: 'listener', text })
     save({ id: crypto.randomUUID(), speaker: 'Listener', text })
-    setStatus('Answering your question…')
-    const host = state.host
-    // If they want another story, the backend switches now and plans its opening while the host bridges with a
-    // short teaser, so the panel is ready the moment the host stops talking.
-    void post<{ intent: string; headline?: string; note?: string }>(`/${session.current}/realtime/listen`,
-      { generation: state.generation, text })
-      .catch(() => ({ intent: 'question' as string, note: undefined, headline: undefined }))
-      .then(result => {
-        if (rt.current !== state) return
-        state.skipping = result.intent === 'skip'
-        if (state.skipping) setStatus(`Moving on to: ${result.headline}`)
-        host.answer(text, result.note)
-      })
-    state.quiet = window.setTimeout(() => { state.listening = false; state.release?.(); state.release = undefined }, 15000)
+    setStatus('Finding the answer in your sources…')
+    resumePanel(state)
   }
-  const showSession = useRef<{ conversation?: Conversation; cue?: number; heardListener: number; ending: boolean;
-    startedAt: number; story: string } | null>(null)
+
 
   async function loadHolding(id: string) {
     try {
@@ -291,13 +265,11 @@ export function PanelPlayer({ owner, stories: chosenStories, preferences, record
     const panel = rt.current
     if (panel) {
       rt.current = null
-      clearTimeout(panel.quiet)
+      clearTimeout(panel.transcriptionTimer)
       panel.release?.()
       panel.agents.forEach(agent => agent.close())
       panel.microphone?.getTracks().forEach(track => track.stop())
     }
-    const showing = showSession.current
-    if (showing) { showSession.current = null; clearTimeout(showing.cue); void showing.conversation?.endSession().catch(() => {}) }
     if (live.current) { live.current.finishing = true; void live.current.conversation?.endSession().catch(() => {}); live.current = null; setLiveWith('') }
     generation.current++
     if (session.current) void fetch('/api/panel/' + session.current, { method: 'DELETE' }).catch(() => {})
@@ -436,7 +408,7 @@ export function PanelPlayer({ owner, stories: chosenStories, preferences, record
         setStatus('Planning your briefing…')
         const plan = await planBriefing(listener)
         if (generation.current !== gen) return
-        lineup = { briefing_plan: plan }
+        lineup = { briefing_plan: plan, expert_count: experts }
       }
       const result = await post<{ id: string; sample: boolean }>('', { ...preferences, mode: 'panel', minutes, ...lineup })
       if (generation.current !== gen) {
@@ -445,11 +417,10 @@ export function PanelPlayer({ owner, stories: chosenStories, preferences, record
       }
       session.current = result.id
       sessionStart.current = gen
-      void loadHolding(result.id)
+      if (!realtimeMode) void loadHolding(result.id)
       record.sample = result.sample
       setSample(result.sample)
-      if (liveShow) await startShow(gen)
-      else if (realtimeMode) await startRealtime(gen)
+      if (realtimeMode) await startRealtime(gen)
       else await next()
     } catch (e) {
       if (generation.current === gen) {
@@ -464,7 +435,7 @@ export function PanelPlayer({ owner, stories: chosenStories, preferences, record
 
   // Realtime panel: connect every agent, then loop: fetch the next brief (usually planned while the previous agent
   // spoke), have its agent speak it, and report what was actually said. The host hears the microphone; when the
-  // listener talks, whoever is speaking stops, the host answers live, and after a quiet moment the panel resumes.
+  // listener talks, the active turn stops. Typed and transcribed questions share the normal turn loop.
   async function startRealtime(gen: number) {
     const id = session.current
     setStatus('Connecting the panel…')
@@ -473,34 +444,18 @@ export function PanelPlayer({ owner, stories: chosenStories, preferences, record
     try { microphone = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } }) }
     catch { setStatus('Microphone unavailable. You can type questions.') }
     if (session.current !== id || generation.current !== gen) { microphone?.getTracks().forEach(t => t.stop()); return }
-    const state: NonNullable<typeof rt.current> = { agents: new Map(), microphone, listening: false, exchange: [],
-      generation: gen - sessionStart.current }
+    const state: NonNullable<typeof rt.current> = { agents: new Map(), microphone, listening: false, questions: [] }
     rt.current = state
-    const story = { title: stories[0]?.title ?? '' }
-    const quietThenResume = (ms: number) => {
-      clearTimeout(state.quiet)
-      state.quiet = window.setTimeout(() => { state.listening = false; state.release?.(); state.release = undefined }, ms)
-    }
     const hostInfo = agents.find(agent => agent.role === 'host')!
     const connected = await Promise.all(agents.map(info => RealtimeAgent.connect(info, model,
       info.role === 'host' ? microphone : null, info.role !== 'host' ? {} : {
         // Push-to-talk: the microphone is only open while the talk button is held, so this is always the listener.
         onListenerText: text => {
           if (rt.current !== state) return
-          clearTimeout(state.duckTimer)
+          clearTimeout(state.transcriptionTimer)
           if (!text.split(/\s+/).some(word => /\w/.test(word))) { resumePanel(state); return }
           listenerAsks(text)
         },
-        onReply: text => {
-          if (rt.current !== state) return
-          state.exchange.push({ role: 'host', text })
-          const line: Segment = { id: crypto.randomUUID(), story: story.title, speaker: `${hostInfo.name} · ${hostInfo.voice} · answering you`, host: hostInfo.name,
-            guests: [], text, sources: [] }
-          setActive(line)
-          save(line)
-        },
-        // A pause, then back to the panel; straight on after a skip, since the next story is already planned.
-        onReplyDone: () => { if (rt.current === state) { quietThenResume(state.skipping ? 600 : 3500); state.skipping = false } },
       })))
     if (rt.current !== state) { connected.forEach(agent => agent.close()); return }
     connected.forEach(agent => state.agents.set(agent.info.id, agent))
@@ -517,20 +472,27 @@ export function PanelPlayer({ owner, stories: chosenStories, preferences, record
     while (rt.current === state) {
       type Turn = { done?: boolean; context?: string | null; id: string; speaker_id: string; speaker: string;
         guests: string[]; story: string; story_id: string; brief: string; max_seconds: number; sources: Segment['sources'] }
-      const turn = await post<Turn>(`/${id}/realtime/next`, step)
+      await waitForListener()
+      if (rt.current !== state) return
+      const question = state.questions.shift()
+      const turn = await post<Turn>(`/${id}/realtime/next`, { ...step, question })
       if (rt.current !== state) return
       if (turn.context) state.host?.context(turn.context)
       // Every agent hears the panel: each spoken line goes to all of them, so guests can react to each other.
       if (turn.done) { setComplete(true); end(); setStatus('Briefing complete.'); return }
-      await waitForListener()
       setStatus(liveStatus)
       const agent = state.agents.get(turn.speaker_id)
       if (!agent) throw new Error(`No agent connected for ${turn.speaker}.`)
-      story.title = turn.story
       if (previousStory.current !== turn.story) {
         setGuests([])
         if (previousStory.current) await storyCue(cueContext.current ??= new AudioContext())
         previousStory.current = turn.story
+      }
+      await waitForListener()
+      if (rt.current !== state) return
+      if (!question && state.questions.length) {
+        step = { generation: gen - sessionStart.current, heard: turn.id, interrupted: true }
+        continue
       }
       setGuests(turn.guests)
       setSpeaker(turn.speaker)
@@ -551,93 +513,18 @@ export function PanelPlayer({ owner, stories: chosenStories, preferences, record
       state.current = undefined
       setSpeaker('')
       if (rt.current !== state) return
-      if (said.text) {
+      if (said.text && !said.interrupted) {
         for (const other of state.agents.values()) {
-          if (other !== agent) other.context(`ON AIR (not addressed to you unless named): ${turn.speaker} said: "${said.text}"`)
+          if (other !== agent) other.context(`ON AIR (context only): ${turn.speaker} said: "${said.text}"`)
         }
         const spoken = { ...line, text: said.text }
         setActive(spoken)
         save(spoken)
         void post(`/${id}/live/audit`, { text: said.text }).catch(() => {})  // logs any figure no card supports
       }
-      if (said.interrupted || state.listening) { state.listening = true; await waitForListener() }
       step = { generation: gen - sessionStart.current, heard: turn.id, text: said.text, seconds: said.seconds,
-        interrupted: said.interrupted, listener: state.exchange.splice(0) }
+        interrupted: said.interrupted }
     }
-  }
-
-  // Live host: one live session presents every story from the fact cards. The player nudges it on with producer
-  // cues after each short chunk, audits every line it speaks for sources and unsupported figures, and lets the
-  // listener simply talk over it.
-  async function startShow(gen: number) {
-    const id = session.current
-    setStatus('Connecting your live host…')
-    const briefing = await post<{ token: string; prompt: string; voice_id: string | null; speaker: string;
-      stories: string[]; max_seconds: number }>(`/${id}/live`, { mode: 'show' })
-    if (session.current !== id || generation.current !== gen) return
-    const state: NonNullable<typeof showSession.current> = { heardListener: 0, ending: false, startedAt: Date.now(),
-      story: briefing.stories[0] ?? '' }
-    showSession.current = state
-    setHost(briefing.speaker)
-    const cue = () => {
-      clearTimeout(state.cue)
-      state.cue = window.setTimeout(() => {
-        if (showSession.current !== state || state.ending) return
-        if (Date.now() - state.heardListener < 1500) { cue(); return }  // the listener is talking: wait
-        const used = (Date.now() - state.startedAt) / 60000
-        state.conversation?.sendUserMessage(`[producer: continue. ${used.toFixed(1)} of ${preferences.minutes} minutes used]`)
-      }, 1200)
-    }
-    const conversation = await Conversation.startSession({
-      conversationToken: briefing.token, connectionType: 'webrtc',
-      overrides: {
-        agent: { prompt: { prompt: briefing.prompt }, firstMessage: "Alright, let's get into today's briefing." },
-        ...(briefing.voice_id ? { tts: { voiceId: briefing.voice_id } } : {}),
-        conversation: { maxDurationSeconds: briefing.max_seconds },
-      },
-      onVadScore: ({ vadScore }) => { if (vadScore > 0.6) state.heardListener = Date.now() },
-      onModeChange: ({ mode }) => {
-        if (showSession.current !== state) return
-        if (mode === 'speaking') { clearTimeout(state.cue); setSpeaker(briefing.speaker); setStatus('') }
-        else {
-          setSpeaker('')
-          if (state.ending) void state.conversation?.endSession().catch(() => {})
-          else cue()
-        }
-      },
-      onMessage: async ({ message, source }) => {
-        const text = message.trim()
-        if (showSession.current !== state || !text || text.startsWith('[producer') || text.startsWith('[fact check')) return
-        if (source === 'user') {
-          state.heardListener = Date.now()
-          save({ id: crypto.randomUUID(), speaker: 'Listener', text })
-          return
-        }
-        if (/that'?s the briefing\.?/i.test(text)) state.ending = true
-        let cards: { story: number; sources: Segment['sources'] }[] = [], correction: string | null = null, story: string | null = null
-        try {
-          ({ cards, correction, story } = await post<{ cards: typeof cards; correction: string | null; story: string | null }>(
-            `/${id}/live/audit`, { text }))
-        } catch { /* show the line without sources */ }
-        if (showSession.current !== state) return
-        if (story) state.story = story
-        if (correction) state.conversation?.sendContextualUpdate(correction)
-        const line: Segment = { id: crypto.randomUUID(), story: state.story, speaker: briefing.speaker,
-          host: briefing.speaker, guests: [], text, sources: cards.flatMap(card => card.sources) }
-        setActive(line)
-        save(line)
-      },
-      onDisconnect: () => {
-        if (showSession.current !== state) return
-        const finished = state.ending
-        end()
-        setStatus(finished ? 'Briefing complete.' : 'The live host disconnected. Close the session and try again.')
-      },
-      onError: message => { if (showSession.current === state) { end(); setStatus('Live host unavailable: ' + message) } },
-    })
-    if (showSession.current !== state) { void conversation.endSession().catch(() => {}); return }
-    state.conversation = conversation
-    setStatus('Live · just speak to interrupt.')
   }
 
   const BACK_TO_SHOW = /\b(carry on|go on|keep going|continue|resume|back to (the )?(briefing|show|panel|news)|that'?s all|that'?s it|thanks?( you)?)\b/i
@@ -735,6 +622,7 @@ export function PanelPlayer({ owner, stories: chosenStories, preferences, record
     })
     const ids = plan.segments.map(segment => segment.article_ids[0])
     if (!ids.length) throw new Error('No stories are available for this briefing.')
+    if (plan.hosts.length < experts) throw new Error('Too few matching experts for this panel. Try a smaller panel or different stories.')
     const found = await postJson<Record<string, { headline: string; publication: string }>>('/api/recommend/lookup', { article_ids: ids })
       .catch(() => ({} as Record<string, { headline: string; publication: string }>))
     const lineup = ids.map(id => ({ id, title: found[id]?.headline ?? chosenStories.find(s => s.id === id)?.title ?? 'Story',
@@ -789,19 +677,11 @@ export function PanelPlayer({ owner, stories: chosenStories, preferences, record
       <AgentStage audio={player} origin={origin} host={host} guests={guests} speaker={speaker}
         onConfirm={phase !== 'playing' ? confirm : undefined} confirming={phase === 'confirming'}>
         {phase !== 'playing' && <BriefingSetup minutes={minutes} experts={experts} disabled={phase === 'confirming'}
-          onMinutes={setMinutes} onExperts={value => { setExperts(value); setMode('panel') }} />}
+          onMinutes={setMinutes} onExperts={setExperts} />}
       </AgentStage>
       <div ref={consolePanel} className="session-console">
       <p role="status" className="player-status">{status}</p>
-      {phase === 'setup' && !recorded && <div className="briefing-setup-options">
-        <label className="field">Format
-          <select value={mode} onChange={event => setMode(event.target.value as Preferences['mode'])}>
-            <option value="panel">Expert panel</option><option value="presenter">Presenter</option>
-          </select>
-        </label>
-      </div>}
       {phase !== 'playing' && <p className="setup-note">{recorded ? 'Recorded preview · fixed audio and two experts. Dial settings apply to generated briefings.'
-        : mode === 'presenter' ? 'Presenter mode · host only. Adjust the lower arc to switch to an expert panel.'
         : 'Drag the arcs to adjust. Tap the host to start.'}</p>}
       {saveError && <p role="alert">This browser could not save your briefing. Check the available device storage.</p>}
       <audio ref={player} aria-label="Synthetic briefing audio" hidden
@@ -828,16 +708,11 @@ export function PanelPlayer({ owner, stories: chosenStories, preferences, record
       Hold to talk</button>}
     {phase === 'playing' && running && !recorded && <form className="flex flex-wrap gap-2" onSubmit={e => {
       e.preventDefault()
-      const showing = showSession.current
-      if (rt.current?.host && question.trim()) listenerAsks(question.trim())  // the host answers out loud
-      else if (showing?.conversation && question.trim()) {  // live host: typed questions go straight into the session
-        save({ id: crypto.randomUUID(), speaker: 'Listener', text: question.trim() })
-        showing.heardListener = Date.now()
-        showing.conversation.sendUserMessage(question.trim())
-      } else void ask(question)
+      if (rt.current?.host && question.trim()) listenerAsks(question.trim())
+      else void ask(question)
       setQuestion('')
     }}>
-      {!liveShow && !realtimeMode && <button className="button" type="button" disabled={!session.current || scribe.status === 'connecting'}
+      {!realtimeMode && <button className="button" type="button" disabled={!session.current || scribe.status === 'connecting'}
         onClick={scribe.isConnected ? scribe.disconnect : microphone}>{scribe.isConnected ? 'Disable microphone' : 'Enable microphone'}</button>}
       <input className="grow rounded border p-2" aria-label="Question for the panel" placeholder="Ask the panel"
         value={question} maxLength={1000} onChange={e => setQuestion(e.target.value)} />

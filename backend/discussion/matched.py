@@ -22,7 +22,7 @@ class DiscussionPlan(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     segments: list[PlannedStory] = Field(min_length=1, max_length=340)
-    hosts: list[UUID] = Field(max_length=2)
+    hosts: list[UUID] = Field(min_length=1, max_length=4)
     tones: dict[str, Tone] = Field(max_length=340)
 
     @model_validator(mode="after")
@@ -75,7 +75,7 @@ def load_panel_sources(article_ids, persona_ids):
     return articles, personas, host
 
 
-def matched_panel(result: CompletedMatch, profile, mode, minutes, client, expert_count=2):
+def matched_panel(result: CompletedMatch, profile, minutes, client, expert_count=2):
     tones = {}
     for entry in result.articles:
         article_id = entry["article_id"]
@@ -93,28 +93,24 @@ def matched_panel(result: CompletedMatch, profile, mode, minutes, client, expert
     groups = group_articles([articles[i] for i in tones], client, stage="session_grouping")
     groups.sort(key=lambda story: min(rank[a.id] for a in story.articles))
     stories = groups[:topic_limit(minutes)]
-    roster = result.agent_ids[:expert_count] if mode == "panel" else []
-    return Panel(stories, personas, host, {s.id: roster for s in stories}, profile, mode, minutes,
+    roster = result.agent_ids[:expert_count]
+    return Panel(stories, personas, host, {s.id: roster for s in stories}, profile, minutes,
                  tones={s.id: [tones[a.id] for a in s.articles] for s in stories})
 
 
-def planned_panel(plan: DiscussionPlan, profile, mode, minutes):
+def planned_panel(plan: DiscussionPlan, profile, minutes):
     ids = [i for segment in plan.segments for i in segment.article_ids]
     articles, personas, moderator = load_panel_sources(ids, plan.hosts)
     if missing := set(ids) - articles.keys():
         raise InvalidMatch("Unknown planned article IDs: " + ", ".join(sorted(missing)))
     if any(i not in personas for i in plan.hosts):
         raise InvalidMatch("Supply known database persona IDs.")
-    if mode == "panel" and moderator in plan.hosts:
+    if moderator in plan.hosts:
         raise InvalidMatch("Tio moderates the panel. Supply only guest IDs.")
-    if mode == "presenter" and len(plan.hosts) > 1:
-        raise InvalidMatch("Presenter mode supports one presenter.")
 
     stories = [Story(id=s.article_ids[0], headline=articles[s.article_ids[0]].headline,
                      articles=[articles[i] for i in s.article_ids]) for s in plan.segments]
-    host = plan.hosts[0] if mode == "presenter" and plan.hosts else moderator
-    roster = plan.hosts if mode == "panel" else []
-    return Panel(stories, personas, host, {s.id: roster for s in stories}, profile, mode, minutes,
+    return Panel(stories, personas, moderator, {s.id: plan.hosts for s in stories}, profile, minutes,
                  tones={s.id: [{"article_id": a.id, "desired_tone": plan.tones[a.id]}
                                for a in s.articles if a.id in plan.tones] for s in stories},
                  story_budgets={s.id: p.estimated_seconds for s, p in zip(stories, plan.segments, strict=True)})

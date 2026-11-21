@@ -76,7 +76,6 @@ details summary { cursor: pointer; color: var(--muted); font-size: .85rem; }
       <h2>Generate</h2>
       <div class="row">
         <label>Length (minutes)<input id="gen-minutes" type="number" min="1" max="120" step="any" required value="10"></label>
-        <label>Mode<select id="gen-mode"><option value="presenter">Presenter</option><option value="debate">Debate</option></select></label>
       </div>
       <button class="primary" type="submit" id="gen-run" disabled>Generate (run Recommend first)</button>
       <p class="muted" style="margin:0;font-size:.8rem">Runs the tone matcher: 20 s to a few minutes depending on length.</p>
@@ -192,7 +191,7 @@ async function generatePlan(e) {
   const out = $("results"); out.textContent = "";
   const status = el("p", { class: "status muted", text: "Generating: fitting the list to the length and picking hosts…" }); out.append(status);
   const body = { ...recommendation, selected_article_ids: [...state.pins], excluded_article_ids: [...state.dismissed],
-                 minutes: +$("gen-minutes").value || 10, mode: $("gen-mode").value };
+                 minutes: +$("gen-minutes").value || 10 };
   const t0 = performance.now();
   $("gen-run").disabled = true;
   $("run").disabled = true;
@@ -205,14 +204,14 @@ async function generatePlan(e) {
     const hosts = el("div", { class: "hosts" });
     plan.hosts.forEach(id => { const p = personas[id] || { name: id, slug: "" }; hosts.append(el("div", { class: "host" }, el("b", { text: p.name }), el("span", { class: "muted", text: p.slug }))); });
     out.append(el("h2", { text: "Discussion hosts" }),
-               plan.hosts.length ? hosts : el("p", { text: "Tio will present solo." }));
-    if (!backendOnly && plan.segments.length) {
+               plan.hosts.length ? hosts : el("p", { text: "No matching guest experts are available." }));
+    if (!backendOnly && plan.segments.length && plan.hosts.length) {
       const start = el("button", { type: "button", class: "primary", text: "Start discussion" });
       start.onclick = () => {
         const stories = plan.segments.map(({ article_ids: [id] }) => ({
           id, title: state.info[id]?.headline || id, topic: state.info[id]?.publication || "", summary: "",
         }));
-        const preferences = { profile: plan.profile, mode: body.mode === "debate" ? "panel" : "presenter", minutes: body.minutes };
+        const preferences = { profile: plan.profile, minutes: body.minutes };
         try {
           sessionStorage.setItem("tio-briefing-plan", JSON.stringify({
             stories, preferences, listenerId: body.user_id, plan: { segments: plan.segments, hosts: plan.hosts, tones: plan.tones },
