@@ -322,8 +322,8 @@ function App() {
 
   if (session) return <main><NewsWorkspace key={session.user.id} owner={'account-' + session.user.id}
     onboarding={session.user.user_metadata?.tio_onboarding} email={session.user.email}
-    // The recommender and briefing endpoints only serve local development for now.
-    listenerId={demoAvailable ? session.user.id : undefined} accessToken={accessToken} onSignOut={signOut} /></main>
+    // The development proxy serves the recommender and briefing endpoints on localhost and through the tunnel.
+    listenerId={import.meta.env.DEV ? session.user.id : undefined} accessToken={accessToken} onSignOut={signOut} /></main>
   if (restoring) return <main className="auth-page">
     <header className="masthead" aria-hidden="true"><AudioRibbon /></header>
     <p role="status" className="auth-layout muted">Signing you in…</p>
