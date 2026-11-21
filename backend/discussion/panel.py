@@ -367,6 +367,7 @@ class Panel:
     openings: dict[UUID, list[str]] = field(default_factory=dict)  # each speaker's recent first sentences
     listener_style: list[str] = field(default_factory=list)  # lasting preferences the listener has shown
     charted: set[str] = field(default_factory=set)  # stories that already showed a chart (realtime panel)
+    wants_charts: bool = False  # the listener asked for charts: chart every figure-heavy turn, not one per story
 
     def signature_lines(self, speaker):
         """Which persona lines this turn may draw on, and how. Nobody introduces themselves. The catchphrases are

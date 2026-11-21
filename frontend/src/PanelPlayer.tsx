@@ -179,13 +179,14 @@ export function PanelPlayer({ owner, stories: chosenStories, preferences, record
     const host = state.host
     // If they want another story, the backend switches now and plans its opening while the host bridges with a
     // short teaser, so the panel is ready the moment the host stops talking.
-    void post<{ intent: string; headline?: string; note?: string }>(`/${session.current}/realtime/listen`,
+    void post<{ intent: string; headline?: string; note?: string; chart?: Chart | null }>(`/${session.current}/realtime/listen`,
       { generation: state.generation, text })
-      .catch(() => ({ intent: 'question' as string, note: undefined, headline: undefined }))
+      .catch(() => ({ intent: 'question' as string, note: undefined, headline: undefined, chart: undefined }))
       .then(result => {
         if (rt.current !== state) return
         state.skipping = result.intent === 'skip'
         if (state.skipping) setStatus(`Moving on to: ${result.headline}`)
+        if (result.chart) setChart(result.chart)  // the chart they asked for, built from the story's reporting
         host.answer(text, result.note)
       })
     state.quiet = window.setTimeout(() => { state.listening = false; state.release?.(); state.release = undefined }, 15000)

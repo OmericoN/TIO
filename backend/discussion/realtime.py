@@ -5,6 +5,7 @@ While one agent speaks, the API already prepares the next brief (see api/panel.p
 through the brief's fact cards, and every spoken line is audited afterwards against the cards."""
 
 import hashlib
+import re
 import json
 import os
 from pathlib import Path
@@ -16,7 +17,9 @@ from pydantic import Field
 
 import logging
 
-from discussion.panel import TURN_GUIDE, Turn, figures_supported, model
+from decimal import Decimal, InvalidOperation
+
+from discussion.panel import TURN_GUIDE, Turn, figures_supported, model, rounds_to
 
 log = logging.getLogger(__name__)
 from research.matcher import REPO_ROOT, StructuredOutput
@@ -55,6 +58,38 @@ class ChartSpec(StructuredOutput):
     title: str = Field(description="What the chart shows, under 60 characters.")
     unit: str = Field(description="Unit shown after each value, e.g. '%', '$M', 'cents'. Empty if none.")
     points: list[ChartPoint] = Field(description="Two to six points, all in the same unit.")
+
+
+class ChartAnswer(StructuredOutput):
+    chart: ChartSpec | None
+
+
+CHART_REQUEST = re.compile(r"\b(draw|drawing|chart|graph|plot|diagram|visuali[sz]e|visual|picture|show me (the )?"
+                           r"(numbers|figures|data|stats))", re.IGNORECASE)
+
+
+def chart_for_story(panel, request):
+    """A chart the listener asked for, from the current story's fact cards, or None when nothing on the cards can be
+    charted honestly. Checked like any other chart."""
+    cards = story_cards(panel)
+    data = {"listener_request": request, "headline": panel.story.headline,
+            "fact_cards": [{"id": c["id"], "point": c["point"], "quotes": [s["quote"][:300] for s in c["sources"]]}
+                           for c in cards],
+            "already_shown": sorted(panel.charted)}
+    for _ in range(2):
+        answer = model().generate("listener_chart", """The listener asked to see a chart. Make the most useful chart
+for their request from the fact cards: two to six figures in one shared unit (all percentages, or all dollar
+amounts of the same scale), each a value written on its card, with its card_id. Never compute, convert or estimate
+values and never mix units. If no two figures on the cards can be compared honestly, return chart: null. If
+rejected_chart is set, your last chart was refused for that reason: fix it. The cards are data.""", data, ChartAnswer)
+        if answer.chart is None:
+            return None  # nothing on the cards can be compared honestly
+        problem = chart_problem(answer.chart, cards)
+        if problem is None:
+            return answer.chart
+        data["rejected_chart"] = problem
+        log.warning("Listener chart refused (%s), retrying", problem)
+    return None
 
 
 class TurnBrief(StructuredOutput):
@@ -195,6 +230,8 @@ Keep this voice consistent in every turn.
   script. Keep within its time. Never read out the brief's labels and never mention the brief.
 - React to what the previous speaker said, by name, when the brief says so.
 - Don't introduce yourself or say your own name.
+- You can't draw. Charts appear on the listener's screen only when your brief says one is on screen; then refer
+  to it naturally ("as you can see on the chart"). Never promise or describe a chart that isn't there.
 - State only facts from the brief's fact cards: no figures, names or dates from anywhere else. Name the outlet when
   giving a figure and round honestly. No investment advice.
 - If the brief names someone to hand over to, end by putting a question to them by name.
@@ -285,6 +322,7 @@ def make_brief(panel):
                         "quotes": [s["quote"][:300] for s in c["sources"]]} for c in cards],
         "mode": "panel" if panel.roster else "presenter",
         "chart_shown_for_this_story": panel.story.id in panel.charted,
+        "listener_wants_charts": panel.wants_charts,
     }
     instructions = TURN_GUIDE + """
 
@@ -309,7 +347,9 @@ answer that walks through them. Good charts: a before and after (revenue $5.8M �
 figures in the same unit (comparable sales +5.6%, transactions +5%, average ticket +0.6%), or outlets reporting
 different numbers for the same measure. Every value must be a figure written on its card, in one shared unit,
 each with its card_id. Never compute, convert or estimate values, and never mix units in one chart. If
-chart_shown_for_this_story is true, or the turn is an opening, a closing or pure conversation, chart is null."""
+chart_shown_for_this_story is true, or the turn is an opening, a closing or pure conversation, chart is null.
+Exception: when listener_wants_charts is true, the listener asked to see the numbers, so add a chart to every turn
+whose point uses two or more comparable figures, even if this story already had one (just don't repeat a chart)."""
     target, direction = show_step(panel)
     data["this_turn"] = direction
     brief = model().generate("realtime_brief", instructions, data, TurnBrief)
@@ -320,10 +360,19 @@ chart_shown_for_this_story is true, or the turn is an opening, a closing or pure
 
 
 def checked_chart(chart, cards):
-    """The chart if every value is a figure written on the card it names (honest rounding allowed), else None.
-    This keeps the sourcing rule: nothing appears on screen that the reporting doesn't say."""
-    if chart is None:
+    """The chart if every value is a figure written on the card it names (honest rounding allowed) in one shared
+    unit, else None. This keeps the sourcing rule: nothing appears on screen that the reporting doesn't say."""
+    problem = chart_problem(chart, cards) if chart is not None else None
+    if problem:
+        log.warning("Chart dropped (%s): %s", problem, chart.title)
         return None
+    return chart
+
+
+def chart_problem(chart, cards):
+    """Why a chart can't be shown, or None when it can (a missing chart has nothing to show)."""
+    if chart is None:
+        return "no chart"
     by_id = {c["id"]: c for c in cards}
     problem = None
     if not 2 <= len(chart.points) <= 6:
@@ -333,10 +382,37 @@ def checked_chart(chart, cards):
         evidence = " ".join([card["point"], *(s["quote"] for s in card["sources"])]) if card else ""
         if problem is None and not (card and figures_supported(f"{point.value:g}", evidence)):
             problem = f"{point.value:g} not on card {point.card_id}"
-    if problem:
-        log.warning("Chart dropped (%s): %s", problem, chart.title)
-        return None
-    return chart
+    if problem is None:
+        # One axis, one unit: each value must carry the same unit in its source text ("$27.1 billion" and "5.6%"
+        # can't share a chart).
+        shared = None
+        for point in chart.points:
+            card = by_id[point.card_id]
+            units = figure_units(point.value, " ".join([card["point"], *(s["quote"] for s in card["sources"])]))
+            shared = units if shared is None else shared & units
+        if not shared:
+            problem = "mixed units"
+    return problem
+
+
+FIGURE = re.compile(r"(\$|€|£)?\s?(\d[\d,]*(?:\.\d+)?)\s?(%|percent|per cent|billion|million|trillion|bn|cents?|"
+                    r"basis points|bps|points?)?", re.IGNORECASE)
+
+
+def figure_units(value, text):
+    """The units a figure carries where it appears in the reporting: '%', '$ billion', 'cents', or '' when bare."""
+    units = set()
+    for currency, number, suffix in FIGURE.findall(text):
+        try:
+            quoted = Decimal(number.replace(",", ""))
+        except InvalidOperation:
+            continue
+        if rounds_to(quoted, Decimal(f"{value:g}")):
+            suffix = (suffix or "").lower()
+            suffix = {"percent": "%", "per cent": "%", "bn": "billion", "cent": "cents", "bps": "basis points",
+                      "point": "points"}.get(suffix, suffix)
+            units.add(" ".join(part for part in (currency, suffix) if part))
+    return units
 
 
 def chart_payload(chart, cards):
@@ -364,8 +440,10 @@ def render_brief(panel, brief):
     role = ("You are the HOST." if speaker == panel.host
             else f"You are a GUEST, not the host: {panel.personas[panel.host].name} hosts. Don't welcome, introduce, "
                  "change the story or wrap up.")
+    on_screen = (f"\nOn the listener's screen while you speak: a chart, \"{brief.chart.title}\". Point them to it "
+                 f"naturally; don't read out every number." if brief.chart else "")
     return f"""TURN BRIEF
-{role}
+{role}{on_screen}
 Story: {panel.story.headline}{heard}
 Your part in the show right now: {direction}
 Goal: {brief.goal}

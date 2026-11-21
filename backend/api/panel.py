@@ -615,6 +615,25 @@ async def realtime_listen(key: UUID, body: ListenerRequest):
     item = session(key)
     if body.generation != item.generation:
         raise HTTPException(409, "Turn superseded.")
+    if realtime.CHART_REQUEST.search(body.text) and item.panel.index < len(item.panel.stories):
+        # Charts come from the reporting, not from the agents: build one now from the story's fact cards.
+        item.panel.wants_charts = True
+        try:
+            chart = await run_in_threadpool(realtime.chart_for_story, item.panel, body.text)
+        except (MatchProcessingError, ValueError) as exc:
+            log.warning("Listener chart failed: %s", exc)
+            chart = None
+        cards = realtime.story_cards(item.panel)
+        if chart:
+            item.panel.charted.add(item.panel.story.id)
+            return {"intent": "chart", "chart": realtime.chart_payload(chart, cards),
+                    "note": (f"The listener asked for a chart, and one is now on their screen: \"{chart.title}\". Say "
+                             f"so, then talk them through what it shows in two or three sentences, naming the outlet. "
+                             f"Don't read out every number. From now on the panel shows charts whenever figures come up.")}
+        return {"intent": "chart", "chart": None,
+                "note": ("The listener asked for a chart, but this story's reporting has no figures that can be compared "
+                         "honestly. Say that plainly in a sentence, mention the panel will show charts when numbers come "
+                         "up, then answer what they're after from the facts you have.")}
     target = item.panel.requested_story(body.text)
     if target is None:
         item.jump = None

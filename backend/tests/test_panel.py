@@ -617,3 +617,41 @@ class FactChartTest(unittest.TestCase):
             self.assertIsNone(realtime.checked_chart(self.chart((5.8, "1.1"), (6.2, "9.9")), self.cards))  # no card
         with self.assertLogs("discussion.realtime", level="WARNING"):
             self.assertIsNone(realtime.checked_chart(self.chart((6.2, "1.1")), self.cards))                # one bar
+
+
+class ChartRequestTest(unittest.IsolatedAsyncioTestCase):
+    async def test_asking_for_a_chart_puts_one_on_screen(self):
+        from discussion import realtime
+        key = uuid4()
+        item = api.Session(fixture())
+        item.touched = time.monotonic()
+        api.sessions[key] = item
+        self.addCleanup(api.sessions.pop, key, None)
+        report = item.panel.story.articles[1]
+        item.panel.reviews[item.panel.story.id] = EvidenceReview(findings=[Finding(
+            point="Growth was 6% by one estimate and 8% by another", status="disputed",
+            citations=[Citation(article_id=report.id, quote=report.body)])])
+        chart = realtime.ChartSpec(kind="comparison", title="Growth estimates", unit="%", points=[
+            realtime.ChartPoint(label="A", value=6, card_id="1.1"), realtime.ChartPoint(label="B", value=6, card_id="1.1")])
+        with patch.object(realtime, "model") as provider:
+            provider.return_value.generate.return_value = realtime.ChartAnswer(chart=chart)
+            result = await api.realtime_listen(key, api.ListenerRequest(generation=0, text="Can you draw that for me?"))
+        self.assertEqual((result["intent"], result["chart"]["title"]), ("chart", "Growth estimates"))
+        self.assertIn("on their screen", result["note"])
+        self.assertTrue(item.panel.wants_charts)
+        no_chart = await api.realtime_listen(key, api.ListenerRequest(generation=0, text="What does that mean?"))
+        self.assertEqual(no_chart["intent"], "question")
+
+
+class ChartUnitTest(unittest.TestCase):
+    def test_a_chart_never_mixes_units(self):
+        from discussion import realtime
+        cards = [{"id": "1.1", "point": "Revenue was $27.1 billion; comparable sales rose 5.6% and transactions 5%",
+                  "status": "reported", "sources": [{"publisher": "Zacks", "quote": "Adjusted EPS was $2.56."}]}]
+        point = lambda label, value: realtime.ChartPoint(label=label, value=value, card_id="1.1")
+        same = realtime.ChartSpec(kind="bars", title="Sales", unit="%", points=[point("Comps", 5.6), point("Traffic", 5)])
+        self.assertIs(realtime.checked_chart(same, cards), same)
+        mixed = realtime.ChartSpec(kind="bars", title="Q3", unit="", points=[point("Revenue", 27.1), point("Comps", 5.6)])
+        with self.assertLogs("discussion.realtime", level="WARNING") as logs:
+            self.assertIsNone(realtime.checked_chart(mixed, cards))
+        self.assertIn("mixed units", logs.output[0])
