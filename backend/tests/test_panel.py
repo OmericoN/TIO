@@ -502,8 +502,8 @@ class RealtimePanelTest(unittest.IsolatedAsyncioTestCase):
         item.touched = time.monotonic()
         api.sessions[key] = item
         self.addCleanup(api.sessions.pop, key, None)
-        briefs = iter(realtime.TurnBrief(goal=f"Goal {i}", points=[f"Point {i}"], card_ids=[], facts=[], handoff=None,
-                                         action="respond", max_seconds=12, visual=None) for i in range(10))
+        briefs = iter(realtime.TurnBrief(take="A view", goal=f"Goal {i}", points=[f"Point {i}"], card_ids=[], facts=[], handoff=None,
+                                         action="respond", max_seconds=12, visual=None, cut_off=False) for i in range(10))
         with patch.object(realtime, "make_brief", side_effect=lambda panel: next(briefs)) as plan:
             first = await api.realtime_next(key, api.RealtimeStep(generation=0))
             self.assertIn("Goal 0", first["brief"])
@@ -558,8 +558,8 @@ class RealtimeRoleTest(unittest.TestCase):
         self.assertIn("Your role: GUEST EXPERT", instructions)
         self.assertIn(f"{host_name} is the host", instructions)
         panel.heard(line("Welcome. What stands out?", handoff=panel.personas[guest].name), [], 5)
-        brief = realtime.TurnBrief(goal="Answer", points=["Growth"], card_ids=[], facts=[], handoff=None, action="respond",
-                                   max_seconds=12, visual=None)
+        brief = realtime.TurnBrief(take="A view", goal="Answer", points=["Growth"], card_ids=[], facts=[], handoff=None, action="respond",
+                                   max_seconds=12, visual=None, cut_off=False)
         self.assertIn("You are a GUEST, not the host", realtime.render_brief(panel, brief))
 
 
@@ -579,8 +579,8 @@ class SkipRequestTest(unittest.IsolatedAsyncioTestCase):
         item.touched = time.monotonic()
         api.sessions[key] = item
         self.addCleanup(api.sessions.pop, key, None)
-        briefs = iter(realtime.TurnBrief(goal=f"Goal {i}", points=["p"], card_ids=[], facts=[], handoff=None, action="respond",
-                                         max_seconds=12, visual=None) for i in range(10))
+        briefs = iter(realtime.TurnBrief(take="A view", goal=f"Goal {i}", points=["p"], card_ids=[], facts=[], handoff=None, action="respond",
+                                         max_seconds=12, visual=None, cut_off=False) for i in range(10))
         with patch.object(realtime, "make_brief", side_effect=lambda panel: next(briefs)) as plan:
             first = await api.realtime_next(key, api.RealtimeStep(generation=0))
             await item.brief_prefetch.task
@@ -703,9 +703,9 @@ class AccuracyTest(unittest.TestCase):
     def test_brief_lines_the_reporting_doesnt_support_are_cut(self):
         from discussion import realtime
         panel = self.panel()
-        invented = realtime.TurnBrief(goal="Explain growth", points=["Ask what drove it", "Profit tripled to 40%"],
+        invented = realtime.TurnBrief(take="A view", goal="Explain growth", points=["Ask what drove it", "Profit tripled to 40%"],
                                       facts=["Revenue grew 6% in the quarter", "Revenue grew 14% in the quarter"],
-                                      card_ids=["1.1"], handoff=None, action="respond", max_seconds=15, visual=None)
+                                      card_ids=["1.1"], handoff=None, action="respond", max_seconds=15, visual=None, cut_off=False)
         with patch.object(realtime, "model") as provider, self.assertLogs("discussion.realtime", level="WARNING"), \
                 patch.object(realtime.visuals, "story_pictures", return_value={}):
             provider.return_value.generate.return_value = invented
@@ -725,9 +725,9 @@ class AccuracyTest(unittest.TestCase):
         from discussion import realtime
         panel = self.panel()
         panel.correction = "Ben said 14, which the reporting doesn't support. Correct it with the card's figure."
-        fixing = realtime.TurnBrief(goal="Correct it", points=["Put the figure right"],
+        fixing = realtime.TurnBrief(take="A view", goal="Correct it", points=["Put the figure right"],
                                     facts=["Quick correction: revenue grew 6% in the quarter, not 14%"],
-                                    card_ids=["1.1"], handoff=None, action="respond", max_seconds=10, visual=None)
+                                    card_ids=["1.1"], handoff=None, action="respond", max_seconds=10, visual=None, cut_off=False)
         with patch.object(realtime, "model") as provider, patch.object(realtime.visuals, "story_pictures", return_value={}):
             provider.return_value.generate.return_value = fixing
             self.assertEqual(realtime.make_brief(panel).facts, fixing.facts)
@@ -745,6 +745,53 @@ class VisualPacingTest(unittest.TestCase):
         panel.wants_visuals = True
         self.assertEqual(visuals.expected(panel, {}), "optional")
         photo = visuals.Visual(kind="picture", title="P", chart=None, flow=None, places=None, picture_article_id="a")
-        brief = realtime.TurnBrief(goal="g", points=["p"], facts=[], card_ids=[], handoff=None, action="respond",
-                                   max_seconds=10, visual=photo)
+        brief = realtime.TurnBrief(take="A view", goal="g", points=["p"], facts=[], card_ids=[], handoff=None, action="respond",
+                                   max_seconds=10, visual=photo, cut_off=False)
         self.assertNotIn("screen", realtime.render_brief(panel, brief))
+
+
+class CutInTest(unittest.IsolatedAsyncioTestCase):
+    async def test_a_planned_cut_in_is_ready_the_moment_the_next_speaker_jumps_in(self):
+        from discussion import realtime
+        key = uuid4()
+        item = api.Session(fixture())
+        item.touched = time.monotonic()
+        api.sessions[key] = item
+        self.addCleanup(api.sessions.pop, key, None)
+        plans = []
+
+        def plan(panel):
+            plans.append(panel.cut_in)
+            return realtime.TurnBrief(take="A view", goal=f"Goal {len(plans)}", points=["p"], facts=[], card_ids=[], handoff=None,
+                                      action="respond", max_seconds=15, visual=None, cut_off=len(plans) == 2)
+
+        with patch.object(realtime, "make_brief", side_effect=plan), \
+                patch.object(realtime.visuals, "story_pictures", return_value={}):
+            opening = await api.realtime_next(key, api.RealtimeStep(generation=0))
+            await item.brief_prefetch.task
+            guest = await api.realtime_next(key, api.RealtimeStep(generation=0, heard=opening["id"], text="Welcome.", seconds=5))
+            await item.brief_prefetch.task
+            self.assertEqual(plans, [False, False, True])               # the barge-in was planned during the line
+            cutter = await api.realtime_next(key, api.RealtimeStep(
+                generation=0, heard=guest["id"], text="Growth looks durable because", seconds=6, cut_off=True))
+            self.assertEqual(len(plans), 3)                               # served instantly from the prefetch
+            self.assertTrue(item.panel.history[-1].text.endswith("because—"))
+            self.assertIn("cutting in on", cutter["brief"])
+            await item.brief_prefetch.task
+
+    def test_the_next_guest_usually_cuts_in_on_the_first_guests_answer(self):
+        from discussion import realtime
+        panel = fixture()
+        first, second = panel.roster
+        panel.heard(line("Welcome. What stands out?", handoff=panel.personas[first].name), [], 5)
+        answer = realtime.TurnBrief(take="It's overdone", goal="Answer", points=["p"], facts=[], card_ids=[],
+                                    handoff=None, action="respond", max_seconds=20, visual=None, cut_off=False)
+        with patch.object(realtime, "model") as provider, patch.object(realtime.random, "random", return_value=0.1), \
+                patch.object(realtime.visuals, "story_pictures", return_value={}):
+            provider.return_value.generate.return_value = answer
+            brief = realtime.make_brief(panel)
+            self.assertTrue(brief.cut_off)                               # the first guest's answer gets cut into
+            self.assertIn("Your take", realtime.render_brief(panel, brief))
+            panel.heard(realtime.brief_turn(brief, "Growth looks durable because—"), [], 8)
+            panel.cut_in = True
+            self.assertFalse(realtime.make_brief(panel).cut_off)        # never two cut-ins in a row

@@ -20,7 +20,7 @@ export class RealtimeAgent {
   private own = new Set<string>()           // responses this player asked for (turn briefs)
   private requesting = false
   private turn: { resolve: (spoken: Spoken) => void; text: string; started: number; timer: number;
-    onText?: (text: string) => void } | null = null
+    onText?: (text: string) => void; onStart?: () => void; audible?: boolean } | null = null
   private replying = new Set<string>()
   readonly audio = new Audio()
 
@@ -74,6 +74,13 @@ export class RealtimeAgent {
       case 'response.done':
         if (id && this.own.has(id) && event.response?.status === 'cancelled') this.finish(true)
         break
+      case 'output_audio_buffer.started':
+        if (this.turn && !this.turn.audible) {
+          this.turn.audible = true
+          this.turn.started = performance.now()
+          this.turn.onStart?.()
+        }
+        break
       case 'output_audio_buffer.stopped':
         if (this.turn) this.finish(false)
         else if (this.replying.size) { this.replying.clear(); this.handlers.onReplyDone?.() }
@@ -96,10 +103,10 @@ export class RealtimeAgent {
   }
 
   /** Speaks a turn brief in the agent's own words; resolves when its audio has finished playing or was cut off. */
-  speak(brief: string, maxSeconds: number, onText?: (text: string) => void): Promise<Spoken> {
+  speak(brief: string, maxSeconds: number, onText?: (text: string) => void, onStart?: () => void): Promise<Spoken> {
     this.finish(true)
     return new Promise(resolve => {
-      this.turn = { resolve, text: '', started: performance.now(), onText,
+      this.turn = { resolve, text: '', started: performance.now(), onText, onStart,
         timer: window.setTimeout(() => this.finish(false), (maxSeconds + 25) * 1000) }
       this.requesting = true
       // The brief goes into the conversation, not into response.instructions: those would replace the agent's

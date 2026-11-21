@@ -144,6 +144,17 @@ if they don't cover it, say so plainly. You may pass the question to a named gue
 - Guests argue from your_angle. React to the previous speaker by name: build on it, question it or push back.
   Agree only when the evidence backs it. Where evidence_review shows disputed or different_basis findings, take
   sides and attribute each to its outlet.
+
+## Have real discussions
+
+- Everyone has a view. Take a clear position on what the facts mean and say it plainly ("I think that's overdone",
+  "That's the wrong number to watch"). Opinions are yours; facts still come only from the cards.
+- Disagree when your angle differs. Challenge the weakest part of the last argument, name it, and say why.
+  Concede only what the evidence forces you to, and keep your ground on the rest.
+- No polite filler: never "great point", "absolutely", "I agree with everything". Don't summarise what someone
+  else just said; answer it.
+- The host provokes: plays devil's advocate, asks who's right, presses a guest who dodges, and lets a
+  disagreement run before moving on.
 - Vary rhythm: a quick one-sentence reaction ("Hang on, that's bookings, not revenue.") between fuller points.
   At most 80 words. Spoken English with contractions; no lists or headings.
 - Humor only when story_tone is upbeat or neutral and your persona allows it. Never joke about harm or loss.
@@ -369,6 +380,7 @@ class Panel:
     visuals_shown: dict[str, list[str]] = field(default_factory=dict)  # per story, so visuals aren't repeated
     wants_visuals: bool = False  # the listener asked to see things: the producer shows visuals more generously
     correction: str = ""  # a figure the last speaker got wrong, for the next turn to put right (realtime panel)
+    cut_in: bool = False  # the next speaker is cutting in on the last one mid-sentence (realtime panel)
 
     def signature_lines(self, speaker):
         """Which persona lines this turn may draw on, and how. Nobody introduces themselves. The catchphrases are
@@ -614,7 +626,7 @@ Said just before the interruption:
         """What the next turn depends on, to tell whether a speculatively drafted turn is still the right one."""
         return (self.index, self.phase, self.speaker() if self.index < len(self.stories) else None,
                 len(self.history), self.count, self.next_guest, self.question, self.reference,
-                tuple(self.listener_style), self.correction)
+                tuple(self.listener_style), self.correction, self.cut_in)
 
     def story_tone(self):
         """The most sensitive tone among the current story's articles; it sets the voice delivery."""

@@ -549,6 +549,7 @@ class RealtimeStep(BaseModel):
     text: str = Field(default="", max_length=4000)      # what the agent actually said
     seconds: float = Field(default=0, ge=0, le=300, allow_inf_nan=False)
     interrupted: bool = False
+    cut_off: bool = False  # the next speaker cut in on this line mid-sentence
     listener: list[LiveLine] = Field(default_factory=list, max_length=40)  # a live exchange with the host
 
 
@@ -594,6 +595,7 @@ def start_brief_prefetch(item):
     panel = item.panel.fork()
     visuals.remember(panel, brief.visual)
     panel.heard(realtime.brief_turn(brief), cards, brief.max_seconds * 0.8, True)
+    panel.cut_in = brief.cut_off  # plan the next speaker's barge-in ahead, so it's ready the moment they cut in
     if panel.index == len(panel.stories):
         return
     item.brief_prefetch = Prefetch(token, item.generation, panel.state(),
@@ -674,8 +676,10 @@ async def realtime_next(key: UUID, step: RealtimeStep):
                                  f"with the card's figure." if slips else "")
         if slips:
             log.warning("Live figure slip by %s: %s | line: %s", name, slips, said)
-        item.panel.heard(realtime.brief_turn(brief, said or None), cards, step.seconds or brief.max_seconds,
-                         not step.interrupted)
+        # A line another speaker cut in on still counts as said, up to where it was cut.
+        item.panel.heard(realtime.brief_turn(brief, (said + "—") if step.cut_off and said else said or None), cards,
+                         step.seconds or brief.max_seconds, not step.interrupted or step.cut_off)
+        item.panel.cut_in = step.cut_off
         item.brief_pending = None
         context = realtime.context_update(item.panel, name, said or " ".join(brief.points))
     if step.listener:

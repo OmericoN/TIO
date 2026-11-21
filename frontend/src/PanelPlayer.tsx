@@ -154,7 +154,7 @@ export function PanelPlayer({ owner, stories: chosenStories, preferences, record
   const rt = useRef<{ agents: Map<string, RealtimeAgent>; host?: RealtimeAgent; microphone: MediaStream | null;
     current?: RealtimeAgent; listening: boolean; exchange: { role: 'listener' | 'host'; text: string }[];
     quiet?: number; duckTimer?: number; release?: () => void; talking?: boolean; generation: number;
-    skipping?: boolean } | null>(null)
+    skipping?: boolean; cutting?: RealtimeAgent; cutTimeout?: number } | null>(null)
 
   function resumePanel(state: NonNullable<typeof rt.current>) {
     clearTimeout(state.quiet)
@@ -173,6 +173,7 @@ export function PanelPlayer({ owner, stories: chosenStories, preferences, record
       state.listening = true
       clearTimeout(state.quiet)
       state.current?.cancel()
+      state.cutting?.cancel()
       state.host.startListening()
       setStatus('Listening… release to ask')
     } else {
@@ -191,6 +192,7 @@ export function PanelPlayer({ owner, stories: chosenStories, preferences, record
     clearTimeout(state.quiet)
     state.current?.duck(1)
     state.current?.cancel()
+    state.cutting?.cancel()
     state.exchange.push({ role: 'listener', text })
     save({ id: crypto.randomUUID(), speaker: 'Listener', text })
     setStatus('Answering your question…')
@@ -546,7 +548,7 @@ export function PanelPlayer({ owner, stories: chosenStories, preferences, record
     while (rt.current === state) {
       type Turn = { done?: boolean; context?: string | null; id: string; speaker_id: string; speaker: string;
         guests: string[]; story: string; story_id: string; brief: string; max_seconds: number; sources: Segment['sources']
-        visual: Visual | null }
+        visual: Visual | null; cut_off: boolean }
       const turn = await post<Turn>(`/${id}/realtime/next`, step)
       if (rt.current !== state) return
       if (turn.context) state.host?.context(turn.context)
@@ -578,15 +580,37 @@ export function PanelPlayer({ owner, stories: chosenStories, preferences, record
         guests: turn.guests, text: '…', sources: turn.sources }
       setActive(line)
       state.current = agent
+      // Cut-ins: when the producer planned that the next speaker jumps in on this one, the loop moves on partway
+      // through this line; the next voice starts over it, and this one is cut off a beat later.
+      let soFar = '', startedAt = performance.now(), cutTimer = 0
+      let cut = () => {}
+      const cutting = new Promise<'cut'>(resolve => { cut = () => resolve('cut') })
       // The transcript appears as the agent improvises it, word by word, rather than as a finished script.
-      const said: Spoken = await agent.speak(turn.brief, turn.max_seconds, text => setActive({ ...line, text }))
+      const speaking = agent.speak(turn.brief, turn.max_seconds, text => { soFar = text; setActive({ ...line, text }) }, () => {
+        startedAt = performance.now()
+        const victim = state.cutting
+        if (victim) {  // this line is cutting in on the last one: overlap for a moment, then stop them
+          state.cutting = undefined
+          clearTimeout(state.cutTimeout)
+          window.setTimeout(() => victim.cancel(), 250)
+        }
+        if (turn.cut_off) cutTimer = window.setTimeout(cut, Math.max(4, turn.max_seconds * (0.45 + Math.random() * 0.2)) * 1000)
+      })
+      const outcome = await Promise.race([speaking, cutting])
+      clearTimeout(cutTimer)
+      const cutOff = outcome === 'cut' && !state.listening
+      const said: Spoken = outcome === 'cut' ? { text: soFar, seconds: (performance.now() - startedAt) / 1000, interrupted: false } : outcome
+      if (cutOff) {
+        state.cutting = agent  // still talking until the next voice is audible (or three seconds pass)
+        state.cutTimeout = window.setTimeout(() => { agent.cancel(); if (state.cutting === agent) state.cutting = undefined }, 3000)
+      } else if (outcome === 'cut') agent.cancel()
       fadeVisual(3000)  // the line that used it is done
       state.current = undefined
       setSpeaker('')
       if (rt.current !== state) return
       if (said.text) {
         for (const other of state.agents.values()) {
-          if (other !== agent) other.context(`ON AIR (not addressed to you unless named): ${turn.speaker} said: "${said.text}"`)
+          if (other !== agent) other.context(`ON AIR (not addressed to you unless named): ${turn.speaker} said: "${said.text}${cutOff ? '—" (cut off mid-sentence)' : '"'}`)
         }
         const spoken = { ...line, text: said.text }
         setActive(spoken)
@@ -595,7 +619,7 @@ export function PanelPlayer({ owner, stories: chosenStories, preferences, record
       }
       if (said.interrupted || state.listening) { state.listening = true; await waitForListener() }
       step = { generation: gen - sessionStart.current, heard: turn.id, text: said.text, seconds: said.seconds,
-        interrupted: said.interrupted, listener: state.exchange.splice(0) }
+        interrupted: said.interrupted, cut_off: cutOff, listener: state.exchange.splice(0) }
     }
   }
 
