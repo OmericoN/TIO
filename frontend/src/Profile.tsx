@@ -58,9 +58,7 @@ export function Profile({ choices, storageError, syncNotice, onChange, briefingO
     <div className="profile-settings">
       {storageError && <p role="status" className="muted">Changes apply for this visit. Your browser couldn’t save them.</p>}
       {syncNotice && <p role="status" className="muted">{syncNotice}</p>}
-      <InterestFields levels={choices.levels} otherInterests={choices.otherInterests}
-        onLevelsChange={levels => onChange({ ...choices, levels })}
-        onOtherChange={otherInterests => onChange({ ...choices, otherInterests })} />
+      <InterestFields levels={choices.levels} onLevelsChange={levels => onChange({ ...choices, levels })} />
       <VoiceAuditions selectedIds={choices.voiceIds} suspended={briefingOpen}
         onToggle={id => onChange({ ...choices, voiceIds: choices.voiceIds.includes(id)
           ? choices.voiceIds.filter(value => value !== id) : [...choices.voiceIds, id] })} />

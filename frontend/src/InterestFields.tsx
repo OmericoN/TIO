@@ -55,14 +55,12 @@ export function interestsFromProfile(levels: unknown, text: unknown) {
 
 type Props = {
   levels?: InterestLevels
-  otherInterests?: string
   onLevelsChange?: (levels: InterestLevels) => void
-  onOtherChange?: (value: string) => void
 }
 
 /** Without `levels` (sign-up) the radar keeps its own state and posts it with the form: `interests` lists the picked
  * topics strongest first and `interest_levels` holds the radar as JSON. */
-export function InterestFields({ levels, otherInterests, onLevelsChange, onOtherChange }: Props) {
+export function InterestFields({ levels, onLevelsChange }: Props) {
   const legendId = useId()
   const [own, setOwn] = useState<InterestLevels>({})
   const value = levels ?? own
@@ -74,10 +72,5 @@ export function InterestFields({ levels, otherInterests, onLevelsChange, onOther
     <InterestRadar topics={topics} levels={value} onChange={change} labelledBy={legendId} />
     {picked.map(topic => <input key={topic} type="hidden" name="interests" value={topic} />)}
     <input type="hidden" name="interest_levels" value={JSON.stringify(value)} />
-    <label className="block text-sm font-medium">
-      Other interests (optional)
-      <input name="other_interests" type="text" maxLength={300} className="form-field" value={otherInterests}
-        onChange={onOtherChange && (event => onOtherChange(event.target.value))} />
-    </label>
   </fieldset>
 }

@@ -5,7 +5,14 @@ export type Headline = { id: string; title: string; topic: string; summary: stri
 export type Card = { id: string; publisher: string; language: string; url: string | null; quote: string; claim: string }
 export type Segment = { id: string; story: string; story_id?: string; speaker: string; host: string; guests: string[]; text: string; sources: Card[]; audio?: string; audioUrl?: string }
 export type Entry = Segment | { id: string; speaker: 'Listener'; text: string }
-export type Briefing = { id: string; date: string; titles: string[]; entries: Entry[]; sample: boolean }
+// pictures: each story's thumbnail by its title, for the saved briefing's card (older briefings have none).
+export type Briefing = { id: string; date: string; titles: string[]; entries: Entry[]; sample: boolean; pictures?: Record<string, string> }
+
+// The stories' web thumbnails by title, kept with a saved briefing.
+export function storyPictures(stories: Headline[]): Record<string, string> {
+  return Object.fromEntries(stories.flatMap(story =>
+    typeof story.thumb_url === 'string' && /^https?:\/\//i.test(story.thumb_url) ? [[story.title, story.thumb_url]] : []))
+}
 // 'realtime' runs the panel as separate speech-to-speech agents (experimental).
 // 'live' is the experimental live host: one host presents the whole briefing over a speech-to-speech session.
 export type Preferences = { profile: string; minutes: number }

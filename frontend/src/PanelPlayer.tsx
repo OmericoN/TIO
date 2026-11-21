@@ -8,7 +8,7 @@ import { TalkDeck } from './TalkDeck'
 import { Citations } from './Citations'
 import { LoadingScene } from './LoadingScene'
 import type { PrepStep } from './LoadingScene'
-import { audioUrl, factChecksAt, historyStore, recordedTurns } from './briefings'
+import { audioUrl, factChecksAt, historyStore, recordedTurns, storyPictures } from './briefings'
 import { RealtimeAgent } from './realtime'
 import { VisualStack, visualKey } from './Visual'
 import type { ShownVisual, Visual } from './Visual'
@@ -125,7 +125,7 @@ export function PanelPlayer({ owner, stories: chosenStories, preferences, langua
   const [host, setHost] = useState('Main Host')
   const [guests, setGuests] = useState<string[]>([])
   const [saveError, setSaveError] = useState(false)
-  const [record] = useState<Briefing>(() => ({ id: crypto.randomUUID(), date: new Date().toISOString(), titles: stories.map(s => s.title), entries: [], sample: recorded }))
+  const [record] = useState<Briefing>(() => ({ id: crypto.randomUUID(), date: new Date().toISOString(), titles: stories.map(s => s.title), pictures: storyPictures(stories), entries: [], sample: recorded }))
   const sampleQueue = useRef<Segment[]>([])
   const previousStory = useRef('')
   const cueContext = useRef<AudioContext | null>(origin.context)
@@ -461,6 +461,7 @@ export function PanelPlayer({ owner, stories: chosenStories, preferences, langua
         agenda = plannedStories
         setStories(agenda)
         record.titles = agenda.map(story => story.title)
+        record.pictures = storyPictures(agenda)
         lineup = { briefing_plan: plan, expert_count: experts }
         setPrep('facts')
       }
@@ -781,7 +782,7 @@ export function PanelPlayer({ owner, stories: chosenStories, preferences, langua
         </div>}
       </div>
       <AgentStage origin={origin} host={host} guests={guests} speaker={speaker} speech={voice?.speaker === speaker ? voice.stream : null}
-        readyFrom={readyFrom.current}
+        readyFrom={readyFrom.current} finished={complete}
         orbPhase={phase === 'setup' ? 'setup' : begun ? 'ready' : 'loading'}
         onConfirm={phase !== 'playing' ? confirm : undefined} confirming={phase === 'confirming'}>
         {phase !== 'playing' && <BriefingSetup minutes={minutes} experts={experts} disabled={phase === 'confirming'}

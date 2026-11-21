@@ -118,6 +118,11 @@ async function check(browser) {
   assert.equal(saved.sources[0].publisher, 'Source turn-2')
   await ask('Next story')
   await page.getByText('Briefing complete.', { exact: true }).waitFor()
+  // The guests fold back into the host once the conversation is over.
+  const folded = page.locator('.actor.guest[data-gone]').filter({ hasText: guest.name })
+  await folded.waitFor({ state: 'attached' })
+  assert.equal(await folded.isVisible(), false)
+  assert.equal(await page.locator('.actor.host').isVisible(), true)
   assert.equal(await page.locator('vite-error-overlay').count(), 0)
   assert.deepEqual(errors, [])
   console.log('Panel', await page.title(), page.url(), 'named expert, microphone deck, sources, history and skip passed')

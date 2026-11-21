@@ -11,8 +11,9 @@ type Props = {
   suspended?: boolean
 }
 
-function VoiceSample({ voice, muted, selected, suspended }: {
-  voice: Persona; muted: boolean; selected: boolean; suspended: boolean
+// Previews start muted: browsing voices stays silent until the listener unmutes or presses Play sample.
+function VoiceSample({ voice, muted, selected, suspended, onUnmute }: {
+  voice: Persona; muted: boolean; selected: boolean; suspended: boolean; onUnmute: () => void
 }) {
   const audioRef = useRef<HTMLAudioElement>(null)
   const attempt = useRef(0)
@@ -33,18 +34,24 @@ function VoiceSample({ voice, muted, selected, suspended }: {
     }
   }, [url])
 
+  // While unmuted, each voice plays as it comes up; muting stops it at once.
   useEffect(() => {
     const audio = audioRef.current
     setStatus('idle')
-    void playSample()
+    if (!muted) void playSample()
     return () => {
       attempt.current += 1
       audio?.pause()
     }
-  }, [playSample])
+  }, [playSample, muted])
 
   return <>
-    {url && <button type="button" className="button voice-preview-play" onClick={() => void playSample(true)}>Play sample</button>}
+    {url && <button type="button" className="button voice-preview-play" onClick={() => {
+      // Asking for a sample means wanting to hear it: unmute first, on the element too so this play is audible.
+      if (audioRef.current) audioRef.current.muted = false
+      if (muted) onUnmute()
+      else void playSample(true)
+    }}>Play sample</button>}
     <p className="voice-preview-status muted">{!voice.preview_url ? 'No preview available · '
       : url && status === 'loading' ? 'Loading preview… · ' : url && status === 'playing' ? 'Previewing · ' : ''}
     {selected ? 'Tap the orb to remove' : 'Tap the orb to save'}</p>
@@ -60,7 +67,7 @@ export function VoiceAuditions({ selectedIds, onToggle, suspended = false }: Pro
   const [paletteOffset] = useState(() => Math.floor(Math.random() * 360))
   const [slide, setSlide] = useState<{ direction: -1 | 1; outgoingHue: number } | null>(null)
   const [catalogStatus, setCatalogStatus] = useState('Loading voices…')
-  const [muted, setMuted] = useState(false)
+  const [muted, setMuted] = useState(true)
   const drag = useRef<{ x: number; y: number } | null>(null)
   const swiped = useRef(false)
 
@@ -201,7 +208,8 @@ export function VoiceAuditions({ selectedIds, onToggle, suspended = false }: Pro
               )
             })}
           </div>
-          <VoiceSample key={voice.id} voice={voice} muted={muted} selected={selected} suspended={suspended} />
+          <VoiceSample key={voice.id} voice={voice} muted={muted} selected={selected} suspended={suspended}
+            onUnmute={() => setMuted(false)} />
         </div>
       )}
       <section className="saved-voices" aria-labelledby="saved-voices-title">

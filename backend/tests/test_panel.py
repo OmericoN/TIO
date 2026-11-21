@@ -777,6 +777,19 @@ class AgendaTest(unittest.TestCase):
         self.assertIn("Be fair while you argue", realtime.agent_instructions(panel, panel.roster[0]))
 
 
+class PodcastDepthTest(unittest.TestCase):
+    def test_every_speaker_knows_it_is_a_podcast_that_explains_the_news(self):
+        from discussion import realtime
+        panel = fixture()
+        for persona in (panel.host, panel.roster[0]):
+            instructions = realtime.agent_instructions(panel, persona)
+            self.assertIn("# You're making a podcast", instructions)
+            self.assertIn("say what it means", instructions)
+            self.assertNotIn("not even general knowledge", instructions)  # explaining a term is allowed
+        self.assertIn("## This is a podcast: explain the news", realtime.TURN_GUIDE)
+        self.assertGreaterEqual(realtime.MAX_SECONDS, 25)
+
+
 class FreshOpeningsTest(unittest.TestCase):
     def test_each_turn_hears_how_recent_lines_began_and_which_fillers_are_spent(self):
         from discussion import realtime
@@ -1065,3 +1078,48 @@ class NoLoopTest(unittest.TestCase):
         realtime.remember_cards(panel, brief)
         realtime.remember_cards(panel, brief)
         self.assertEqual(panel.cards_used[panel.story.id], ["1.1", "1.2"])
+
+
+class StoryArcTest(unittest.TestCase):
+    def test_each_story_moves_from_setup_through_the_debate_to_its_close(self):
+        from discussion import realtime
+        panel = fixture()
+        panel.story_budgets[panel.story.id] = 600
+        self.assertEqual(panel.story_stage(), "setup")
+        first = panel.personas[panel.roster[0]].name
+        panel.heard(line(f"Here's the story. {first}, what stands out?", handoff=first), [], 20)
+        self.assertEqual(panel.story_stage(), "what we know")
+        panel.count = 2                                              # half the exchanges spent
+        self.assertEqual(panel.story_stage(), "what it means")
+        panel.seconds = 500                                          # or most of the story's time
+        self.assertEqual(panel.story_stage(), "what's next")
+        panel.phase = "close"
+        self.assertEqual(panel.story_stage(), "landing")
+        panel.jump_to(1)
+        self.assertEqual(panel.story_stage(), "setup")               # every story starts over
+        brief = realtime.TurnBrief(take="A view", goal="g", points=["p"], facts=[], card_ids=[], handoff=None,
+                                   action="respond", max_seconds=10, visual=None)
+        self.assertIn("Where the story is: the host is setting the story up", realtime.render_brief(panel, brief))
+
+    def test_the_guides_ask_for_one_coherent_accurate_story_without_repeats(self):
+        from discussion import realtime
+        guide = realtime.TURN_GUIDE
+        self.assertIn("## Tell it as one story", guide)
+        self.assertIn("story_stage", guide)
+        self.assertIn("a forecast never a result", guide)              # certainty kept
+        self.assertIn('"because" needs a source', guide)               # no invented causes
+        self.assertIn("Every phrase works once", guide)                # no pet phrases
+        panel = fixture()
+        voice = realtime.agent_instructions(panel, panel.host)
+        self.assertIn("Pick up the thread", voice)
+        self.assertIn("as certain as its card", voice)
+
+    def test_spice_comes_from_delivery_never_from_the_facts(self):
+        from discussion import realtime
+        panel = fixture()
+        self.assertIn("## Bring some spice", realtime.TURN_GUIDE)
+        self.assertIn("Spice never costs accuracy or time", realtime.TURN_GUIDE)
+        self.assertIn("Bring some spice", realtime.agent_instructions(panel, panel.roster[0]))
+        _, direction = realtime.show_step(panel)
+        self.assertIn("open on a hook", direction)                     # every story starts with a reason to listen
+        self.assertIn("what happened", direction)

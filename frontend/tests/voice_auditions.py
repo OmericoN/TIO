@@ -51,6 +51,12 @@ with sync_playwright() as p:
             expect(page.locator(selector)).to_have_css('font-family', 'Questrial, sans-serif')
         dots = page.get_by_role('group', name='Nearby voices')
         first = page.locator('.voice-carousel-info h4').inner_text()
+        # Previews start muted and silent: nothing plays until the listener asks for sound.
+        expect(page.get_by_role('button', name='Unmute voice previews')).to_have_attribute('aria-pressed', 'true')
+        assert page.locator('.voice-auditions audio').evaluate('e => e.paused')
+        expect(page.locator('.voice-preview-status')).not_to_contain_text('Previewing')
+        page.get_by_role('button', name='Unmute voice previews').click()
+        expect(page.locator('.voice-preview-status')).to_contain_text('Previewing')
         page.get_by_role('button', name='Next voice', exact=True).click()
         expect(page.locator('.voice-carousel-info h4')).not_to_have_text(first)
         expect(page.locator('.voice-preview-status')).to_contain_text('Previewing')
@@ -201,7 +207,6 @@ with sync_playwright() as p:
     appearance = page.get_by_role('region', name='Appearance')
     assert appearance.bounding_box()['y'] < page.locator('.interest-options').bounding_box()['y']
     expect(page.get_by_role('slider', name='Technology', exact=True)).to_have_attribute('aria-valuenow', '2')
-    expect(page.get_by_label('Other interests (optional)')).to_have_value('Urban planning')
     saved = page.locator('.saved-voices')
     expect(saved.get_by_text('Ada', exact=True)).to_be_visible()
     page.get_by_role('group', name='Nearby voices').get_by_role('button', name='Ada', exact=True).click()
@@ -210,7 +215,6 @@ with sync_playwright() as p:
     page.wait_for_function("document.querySelector('.voice-auditions audio').currentTime > 0")
     page.get_by_role('slider', name='Technology', exact=True).press('Home')
     page.get_by_role('slider', name='Company earnings', exact=True).press('End')
-    page.get_by_label('Other interests (optional)').fill('City budgets')
     saved.get_by_role('button', name='Remove Ada from saved voices').click()
     page.get_by_role('button', name='Briefings', exact=True).click()
     expect(page.get_by_role('heading', name='Briefings', exact=True)).to_be_visible()
@@ -220,7 +224,7 @@ with sync_playwright() as p:
     open_profile(first_email)
     expect(page.get_by_role('slider', name='Technology', exact=True)).to_have_attribute('aria-valuenow', '0')
     expect(page.get_by_role('slider', name='Company earnings', exact=True)).to_have_attribute('aria-valuenow', '3')
-    expect(page.get_by_label('Other interests (optional)')).to_have_value('City budgets')
+    expect(page.get_by_label('Other interests (optional)')).to_have_count(0)
     expect(saved.get_by_text('Ada', exact=True)).to_have_count(0)
     page.get_by_role('button', name='News feed', exact=True).click()
     page.get_by_role('button', name='Select article:', exact=False).first.click()
@@ -228,7 +232,7 @@ with sync_playwright() as p:
     page.route('**/api/panel', lambda route: route.fulfill(status=503, json={'detail': 'Test endpoint reached'}))
     with page.expect_request('**/api/panel') as start:
         page.get_by_role('button', name='Begin briefing').click()
-    assert 'Company earnings, City budgets' in start.value.post_data_json['profile']
+    assert 'Company earnings, Urban planning' in start.value.post_data_json['profile']  # sign-up words are kept
     open_profile('profile-two@example.invalid')
     expect(page.get_by_role('slider', name='Technology', exact=True)).to_have_attribute('aria-valuenow', '2')
     expect(page.get_by_role('slider', name='Company earnings', exact=True)).to_have_attribute('aria-valuenow', '0')

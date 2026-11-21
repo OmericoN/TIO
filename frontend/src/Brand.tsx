@@ -15,6 +15,9 @@ const icons = {
   check: 'm5 12 4 4L19 6',
   list: 'M8 6h12M8 12h12M8 18h12M4 6h.01M4 12h.01M4 18h.01',
   search: 'M16.5 16.5 21 21 M18 10.5a7.5 7.5 0 1 1-15 0 7.5 7.5 0 0 1 15 0Z',
+  chevron: 'm6 9 6 6 6-6',
+  copy: 'M9 9h11v11H9z M15 9V4H4v11h5',
+  trash: 'M4 7h16 M10 11v6 M14 11v6 M6 7l1 13h10l1-13 M9 7V4h6v3',
 }
 
 export function Icon({ name }: { name: keyof typeof icons }) {

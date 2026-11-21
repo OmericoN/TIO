@@ -183,8 +183,6 @@ function App() {
     const secondaryLanguage = text('secondary_language')
     const interests = form.getAll('interests') // picked radar topics, strongest first
     const interestLevels = readLevels(JSON.parse(text('interest_levels') || '{}'))
-    const otherInterests = text('other_interests')
-    if (otherInterests) interests.push(otherInterests)
 
     for (const field of formElement.querySelectorAll<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>(
       'input, select, textarea',
@@ -213,7 +211,7 @@ function App() {
         return
       }
       if (!interests.length) {
-        setError('Set at least one topic on the radar or enter your own interest.')
+        setError('Set at least one topic on the radar.')
         return
       }
       setStep(2)

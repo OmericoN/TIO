@@ -12,10 +12,12 @@ type Props = {
   confirming?: boolean
   orbPhase: 'setup' | 'loading' | 'ready'
   readyFrom: { x: number; y: number } | null
+  // The conversation is over: the guests fold back into the host.
+  finished?: boolean
   children?: ReactNode
 }
 
-export function AgentStage({ origin, host, guests, speaker, speech, onConfirm, confirming, orbPhase, readyFrom, children }: Props) {
+export function AgentStage({ origin, host, guests, speaker, speech, onConfirm, confirming, orbPhase, readyFrom, finished, children }: Props) {
   const stage = useRef<HTMLDivElement>(null)
   const hostBody = useRef<HTMLDivElement>(null)
   const entrance = useRef<Animation | null>(null)
@@ -95,6 +97,49 @@ export function AgentStage({ origin, host, guests, speaker, speech, onConfirm, c
     return () => { cancelled = true }
   }, [orbPhase, guests])
 
+  // When the conversation is over, each guest folds back into the host the way it budded out of it, and the host
+  // gives a small gulp once the last one is in.
+  useLayoutEffect(() => {
+    const body = hostBody.current
+    const room = stage.current
+    if (!finished || orbPhase !== 'ready' || !body || !room) return
+    const leaving = [...room.querySelectorAll<HTMLElement>('.guest[data-born]:not([data-leaving])')]
+    if (!leaving.length) return
+    const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches
+    const hostOrb = body.querySelector('.orb-meter')!.getBoundingClientRect()
+    const folds = leaving.map((guest, index) => {
+      guest.dataset.leaving = 'true'
+      if (reduced) { guest.dataset.gone = 'true'; return null }
+      const bud = guest.querySelector<HTMLElement>('.guest-bud')!
+      const slot = bud.getBoundingClientRect()
+      const dx = slot.left + slot.width / 2 - hostOrb.left - hostOrb.width / 2
+      const dy = slot.top + slot.height / 2 - hostOrb.top - hostOrb.height / 2
+      const rim = hostOrb.width / 2 + slot.width * .1
+      const travel = 1 - Math.min(1, rim / Math.max(1, Math.hypot(dx, dy)))
+      const angle = Math.atan2(dy, dx)
+      const pose = (remaining: number, length: number, breadth: number) =>
+        `translate(${-dx * travel * remaining}px, ${-dy * travel * remaining}px) rotate(${angle}rad) scale(${length}, ${breadth}) rotate(${-angle}rad)`
+      const delay = index * 90
+      guest.querySelector(':scope > span')?.animate([{ opacity: 1 }, { opacity: 0 }], { duration: 160, delay, fill: 'forwards' })
+      const fold = bud.animate([
+        { transform: 'none', opacity: 1 },
+        { transform: pose(.18, .96, .82), opacity: 1, offset: .3 },
+        { transform: pose(.83, .53, .34), opacity: 1, offset: .75 },
+        { transform: pose(1, .28, .22), opacity: 0 },
+      ], { duration: 520, delay, fill: 'forwards', easing: 'cubic-bezier(.77, 0, .175, 1)' })
+      void fold.finished.then(() => { guest.dataset.gone = 'true' }, () => {})
+      return fold
+    }).filter(fold => fold !== null)
+    if (folds.length) void Promise.allSettled(folds.map(fold => fold.finished)).then(() => {
+      body.animate([
+        { transform: 'none' },
+        { transform: 'scale(1.09, .92)', offset: .35 },
+        { transform: 'scale(.97, 1.04)', offset: .7 },
+        { transform: 'none' },
+      ], { duration: 520, easing: 'cubic-bezier(.23, 1, .32, 1)' })
+    })
+  }, [finished, orbPhase, guests])
+
   useEffect(() => {
     const context = origin.context
     const actor = stage.current?.querySelector<HTMLElement>('.actor[data-speaking="true"]')
@@ -163,7 +208,8 @@ export function AgentStage({ origin, host, guests, speaker, speech, onConfirm, c
       </div>
       <span>{onConfirm ? 'Tap to begin' : hostLabel}</span>
     </div>
-    {guests.map((guest, index) => <div key={guest} className={'actor guest guest-' + index} data-speaking={speaker === guest}>
+    {guests.map((guest, index) => <div key={guest} className={'actor guest guest-' + index} data-speaking={speaker === guest}
+      aria-hidden={finished || undefined}>
       <div className="guest-bud"><div className="orb-meter"><Orb /></div></div><span>{guest}</span>
     </div>)}
   </div>
