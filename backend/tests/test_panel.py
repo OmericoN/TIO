@@ -26,7 +26,7 @@ def fixture():
     host, *guests = catalog
     sample = Path(__file__).resolve().parents[1] / "discussion" / "sample.json"
     stories = load_index(sample, 0)
-    return Panel(stories, catalog, host, {s.id: guests for s in stories}, "Explain the figures", "panel", 4)
+    return Panel(stories, catalog, host, {s.id: guests for s in stories}, "Explain the figures", 4)
 
 
 def line(text="Let's hear from the panel.", action="respond", citations=(), handoff=None):
@@ -49,8 +49,8 @@ class PanelTest(unittest.TestCase):
                 self.assertEqual((result.minutes, len(result.roster)), (7, count))
                 self.assertNotIn(result.host, result.roster)
                 self.assertEqual(len(set(result.roster)), count)
-            solo = api.make_panel(api.Start(profile="Listener", story_ids=[panel.story.id], mode="presenter", expert_count=4))
-            self.assertEqual(solo.roster, [])
+            with self.assertRaises(ValidationError):
+                api.Start(profile="Listener", mode="presenter")
             catalog.pop(persona.id)
             with self.assertRaisesRegex(ValueError, "Only 3 experts are available"):
                 api.make_panel(api.Start(profile="Listener", story_ids=[panel.story.id], expert_count=4))
@@ -166,13 +166,15 @@ class PanelTest(unittest.TestCase):
                 "intro_template": "I'm here.", "outro_template": "Bye for now.",
                 "catchphrases": ["A warm 'yeah' when acknowledging a guest"]})
         offered, notes = panel.signature_lines(guest)
-        self.assertEqual(offered, {"catchphrases"})                   # habits every turn, never an intro
+        self.assertFalse(offered)
+        self.assertNotIn("warm", notes)
         self.assertIn("Do not introduce yourself", notes)
         self.assertEqual(panel.speaker(), host)
         panel.heard(line("Hi there. Rates fell."), [], 1)
         self.assertEqual((panel.speaker_turns[host], panel.openings[host]), (1, ["Hi there."]))
         panel.index, panel.phase = len(panel.stories) - 1, "close"
-        self.assertEqual(panel.signature_lines(host)[0], {"catchphrases", "outro_template"})
+        self.assertEqual(panel.signature_lines(host)[0], {"outro_template"})
+        self.assertIn("warm", panel.signature_lines(host)[1])
 
     def test_a_line_that_restates_an_earlier_one_is_redrafted(self):
         panel = fixture()
@@ -287,10 +289,6 @@ class PanelTest(unittest.TestCase):
         panel.guests[panel.story.id] = [expert]
         panel.question = "Markets, which source gives that number?"
         self.assertEqual(panel.speaker(), expert)
-        panel.question = ""
-        panel.mode = "presenter"
-        panel.heard(line(), [], 2)
-        self.assertEqual((panel.phase, panel.speaker()), ("close", panel.host))
 
     def test_cost_projection_keeps_shared_work_separate(self):
         costs = project(["stage=event_grouping model=m input_tokens=100 cached_input_tokens=10 output_tokens=20",
@@ -431,6 +429,75 @@ class HandoffTest(unittest.TestCase):
                 self.assertEqual(panel.next_guest, second)
 
 
+class PanelFloorTest(unittest.TestCase):
+    def test_each_booked_expert_gets_a_completed_turn_even_when_time_runs_out(self):
+        from discussion.realtime import show_step
+        for size in (2, 3, 4):
+            panel = fixture()
+            while len(panel.roster) < size:
+                n = len(panel.roster)
+                expert = panel.personas[panel.roster[0]].model_copy(update={
+                    "id": uuid4(), "name": f"Guest {n}", "slug": f"guest-{n}"})
+                panel.personas[expert.id] = expert
+                panel.roster.append(expert.id)
+            panel.story_budgets[panel.story.id] = 20
+            self.assertEqual(panel.turn_seconds(), 8)
+            for guest in panel.roster:
+                target = panel.personas[guest].name
+                self.assertEqual(show_step(panel)[0], target)
+                panel.heard(line(f"{target}, what changed?", handoff=target), [], 10)
+                self.assertEqual(panel.speaker(), guest)
+                panel.heard(line("I was about to say…"), [], 2, fully_heard=False)
+                self.assertNotIn(guest, panel.guest_turns)
+                self.assertEqual(panel.speaker(), guest)
+            self.assertIsNone(show_step(panel)[0])
+            panel.heard(line("The two estimates cover different activities."), [], 8)
+            self.assertEqual((panel.speaker(), panel.phase), (panel.host, "close"))
+            self.assertEqual(panel.guest_turns, set(panel.roster))
+
+    def test_spoken_address_beats_dispute_budget_and_planned_guest(self):
+        panel = fixture()
+        a, b = panel.roster
+        panel.personas[b] = panel.personas[b].model_copy(update={"name": "Leila Grant"})
+        c = panel.personas[a].model_copy(update={"id": uuid4(), "name": "Leila Jones", "slug": "accounts"})
+        panel.personas[c.id] = c
+        panel.roster.append(c.id)
+        panel.phase, panel.next_guest = "guest", a
+        panel.guest_turns = {b, c.id}
+        panel.reviews[panel.story.id] = EvidenceReview(findings=[
+            Finding(point="Different periods", status="different_basis", citations=[])])
+        self.assertIsNone(panel.asked_guest("Leila, what changed?"))
+        self.assertIsNone(panel.asked_guest("Leila Grant said growth slowed. How come?"))
+        self.assertIsNone(panel.asked_guest("What did Leila Grant report?"))
+        panel.heard(line("Leila Grant, what explains that slowdown?", action="close", handoff=c.name), [], 130)
+        self.assertEqual(panel.speaker(), b)
+        self.assertLessEqual(panel.turn_seconds(), 12)
+        panel.heard(line("The reports cover different periods."), [], 8)
+        self.assertEqual((panel.speaker(), panel.phase), (panel.host, "close"))
+
+    def test_spoken_reply_precedes_a_host_probe_while_time_remains(self):
+        panel = fixture()
+        a, b = panel.roster
+        panel.guest_turns = {b}
+        panel.phase, panel.next_guest = "guest", a
+        panel.heard(line(f"What period is this, {panel.personas[b].name}?", action="clarify"), [], 3)
+        self.assertEqual(panel.speaker(), b)
+
+
+    def test_listener_interruption_preserves_the_original_expert_question(self):
+        from discussion import realtime
+        panel = fixture()
+        first, second = panel.roster
+        question = f"{panel.personas[second].name}, why do the periods differ?"
+        panel.phase, panel.next_guest = "guest", first
+        panel.heard(line(question), [], 8)
+        panel.question = "Markets, explain the headline"
+        self.assertEqual(panel.speaker(), first)
+        panel.heard(line("The headline covers continuing operations."), [], 8)
+        self.assertEqual(panel.speaker(), second)
+        brief = realtime.TurnBrief(take="A view", facts=[], visual=None, goal="Explain", points=["Periods"], card_ids=[], handoff=None, action="respond", max_seconds=8)
+        self.assertIn(question, realtime.render_brief(panel, brief))
+
 class LiveConversationTest(unittest.IsolatedAsyncioTestCase):
     async def test_live_session_is_briefed_and_folded_back_into_the_panel(self):
         key = uuid4()
@@ -481,9 +548,6 @@ class LiveHostTest(unittest.TestCase):
         self.assertEqual(cards[0]["id"], "1.1")
         self.assertEqual(cards[0]["sources"][0]["claim"], "Revenue grew 6% in the quarter")
         self.assertEqual({c["story"] for c in cards}, set(range(1, len(fixture().stories) + 1)))
-        prompt = self.panel().show_prompt()
-        self.assertIn("[1.1] Revenue grew 6% in the quarter", prompt)
-        self.assertIn("That's the briefing.", prompt)
 
     def test_audit_shows_the_card_used_and_flags_invented_figures(self):
         panel = self.panel()
@@ -515,7 +579,107 @@ class RealtimePanelTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(plan.call_count, 2)                     # served from the prefetch
             self.assertEqual(item.panel.history[-1].text, "So revenue is up, Leila?")
             self.assertIn("So revenue is up, Leila?", second["context"])
+            self.assertIn("So revenue is up, Leila?", second["brief"])
+            self.assertNotIn("Point 0", second["brief"])
             await item.brief_prefetch.task
+
+    async def test_changed_spoken_addressee_discards_prefetch_and_refreshes_persona(self):
+        from discussion import realtime
+        panel = fixture()
+        first, second = panel.roster
+        panel.openings[second] = ["My last opener."]
+        key = uuid4()
+        item = api.sessions[key] = api.Session(panel, touched=time.monotonic())
+        self.addCleanup(api.sessions.pop, key, None)
+        def draft(stage, instructions, data, output):
+            self.assertIn("persona", data)
+            return output(take="A view", facts=[], visual=None, goal=data["speaker"], points=["Scope matters."], card_ids=["1.1"],
+                          handoff=None, action="respond", max_seconds=12)
+        with patch.object(realtime, "model") as provider:
+            provider.return_value.generate.side_effect = draft
+            opening = await api.realtime_next(key, api.RealtimeStep(generation=0))
+            await item.brief_prefetch.task
+            self.assertEqual(provider.return_value.generate.call_args.args[2]["speaker"], panel.personas[first].name)
+            question = f"{panel.personas[second].name}, which period is this?"
+            reply = await api.realtime_next(key, api.RealtimeStep(
+                generation=0, heard=opening["id"], text=question, seconds=8))
+            self.assertEqual(reply["speaker_id"], str(second))
+            self.assertIn(question, reply["brief"])
+            self.assertIn(panel.personas[second].personality_md.splitlines()[-1], reply["brief"])
+            self.assertIn("My last opener.", reply["brief"])
+            await item.brief_prefetch.task
+
+    async def test_listener_answers_use_one_planner_call_and_normal_speaker_and_sources(self):
+        from discussion import realtime
+        for name in (True, False):
+            panel = fixture()
+            guest = panel.roster[-1]
+            question = ("Economy Specialist, " if name else "") + "which period does this cover?"
+            key = uuid4()
+            item = api.sessions[key] = api.Session(panel, touched=time.monotonic())
+            self.addCleanup(api.sessions.pop, key, None)
+            calls = []
+            def draft(stage, instructions, data, output):
+                extra = {}
+                if data["question"]:
+                    calls.append(data)
+                    if not name:
+                        self.assertEqual(output, realtime.RoutedBrief)
+                        self.assertIn(str(guest), data["candidates"])
+                        extra["speaker_id"] = guest
+                    else:
+                        self.assertIs(output, realtime.TurnBrief)
+                return output(take="A view", facts=[], visual=None, goal="Explain the reporting period", points=["Compare periods"], card_ids=["1.1"],
+                              handoff=None, action="respond", max_seconds=12, **extra)
+            with patch.object(realtime, "model") as provider:
+                provider.return_value.generate.side_effect = draft
+                reply = await api.realtime_next(key, api.RealtimeStep(generation=0, question=question))
+                self.assertEqual((reply["speaker_id"], reply["speaker"]), (str(guest), panel.personas[guest].name))
+                self.assertEqual(reply["sources"], realtime.story_cards(panel)[0]["sources"])
+                self.assertIn(question, reply["brief"])
+                await item.brief_prefetch.task
+                self.assertEqual(len(calls), 1)
+                await api.realtime_next(key, api.RealtimeStep(generation=0, heard=reply["id"],
+                                            text="The reports compare the same quarter.", seconds=8))
+                self.assertEqual(panel.history[-1].speaker, panel.personas[guest].name)
+                if item.brief_prefetch:
+                    await item.brief_prefetch.task
+
+    async def test_listener_skip_releases_interrupted_floor_and_finishes_last_story(self):
+        from discussion import realtime
+        key = uuid4()
+        panel = fixture()
+        item = api.sessions[key] = api.Session(panel, touched=time.monotonic())
+        self.addCleanup(api.sessions.pop, key, None)
+        with patch.object(realtime, "make_brief", return_value=realtime.TurnBrief(
+                take="A view", facts=[], visual=None, goal="Open", points=["A fact"], card_ids=[], handoff=None, action="respond", max_seconds=8)):
+            first = await api.realtime_next(key, api.RealtimeStep(generation=0))
+            second = await api.realtime_next(key, api.RealtimeStep(generation=0, heard=first["id"],
+                                             interrupted=True, question="Skip this story"))
+            self.assertEqual((second["story_id"], second["speaker_id"]), (panel.stories[1].id, str(panel.host)))
+            self.assertFalse(panel.history)
+            done = await api.realtime_next(key, api.RealtimeStep(generation=0, heard=second["id"],
+                                           interrupted=True, question="Next story"))
+            self.assertTrue(done["done"])
+
+    def test_signature_saying_rotates_only_on_even_completed_turns(self):
+        from discussion import realtime
+        panel = fixture()
+        speaker = panel.roster[0]
+        panel.personas[speaker] = panel.personas[speaker].model_copy(update={"catchphrases": ["First saying", "Second saying"]})
+        self.assertNotIn("First saying", realtime.agent_instructions(panel, speaker))
+        brief = realtime.TurnBrief(take="A view", facts=[], visual=None, goal="Explain", points=["Scope"], card_ids=[], handoff=None, action="respond", max_seconds=8)
+        for completed, expected in enumerate([None, "First saying", None, "Second saying"]):
+            panel.phase, panel.next_guest = "guest", speaker
+            for _ in range(2):
+                self.assertEqual(panel.optional_phrase(speaker), expected)
+                reminder = realtime.render_brief(panel, brief)
+                self.assertEqual("Optional verbal habit" in reminder, bool(expected))
+                if expected:
+                    self.assertIn(expected, reminder)
+                panel.heard(line(), [], 1, fully_heard=False)
+            self.assertEqual(panel.speaker_turns.get(speaker, 0), completed)
+            panel.heard(line(), [], 8)
 
     def test_every_speaker_gets_a_distinct_voice(self):
         from discussion import realtime
@@ -542,6 +706,7 @@ class ShowStructureTest(unittest.TestCase):
         panel.heard(line(f"Welcome! {first}, what stands out?", handoff=first), [], 10)
         target, direction = realtime.show_step(panel)
         self.assertEqual((panel.personas[panel.speaker()].name, target), (first, second))
+        panel.story_budgets[panel.story.id] = 30
         panel.heard(line(f"Growth is real. {second}?", handoff=second), [], 10)
         target, _ = realtime.show_step(panel)
         self.assertEqual((panel.personas[panel.speaker()].name, target), (second, None))

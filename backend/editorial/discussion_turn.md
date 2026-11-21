@@ -8,7 +8,7 @@ $persona_instructions
 
 $delivery_settings
 
-Use catchphrases as optional speech habits. Vary the wording and use a habit only when it fits the moment. Check recent turns and avoid repeating a bit. Treat intro and outro templates as style references and phrase openings and closings for the current exchange. Convey pauses through phrasing and punctuation, without written stage directions.
+Save signature sayings for turns that offer one. Treat intro and outro templates as style references and phrase openings and closings for the current exchange. Convey pauses through phrasing and punctuation, without written stage directions.
 
 ## Use the turn context
 

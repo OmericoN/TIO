@@ -23,7 +23,7 @@ class GenerateRequest(BaseModel):
     selected_article_ids: list[str] = Field(default_factory=list, max_length=50,
                                             description="Articles the listener definitely wants; always kept.")
     minutes: float = Field(ge=1, le=120, description="Podcast length chosen by the listener.")
-    mode: Literal["presenter", "debate"] = "presenter"
+    mode: Literal["debate"] = "debate"
     expert_count: int = Field(default=2, ge=1, le=4, description="Guests in a debate (the player's experts dial).")
     focus: str | None = Field(default=None, min_length=2, max_length=500,
                               description="The focus the list was made with, so added articles respect it.")
@@ -35,7 +35,7 @@ class GeneratePlan(BaseModel):
     article_ids: list[str] = Field(description="Final articles, story by story.")
     profile: str
     persona_ids: list[str] = Field(description="Every persona, ordered by the listener's preferences.")
-    hosts: list[str] = Field(description="1 (presenter) or 2 (debate) personas: the listener's order, minus hosts "
+    hosts: list[str] = Field(description="Up to four guest experts: the listener's order, minus personas "
                                          "too jokey for the plan's most sensitive tone.")
     tones: dict[str, str] = Field(description="Preset tone per article (articles.tone).")
     segments: list[PlannedStory]
@@ -54,7 +54,7 @@ def generate_briefing(body: GenerateRequest, request: Request) -> GeneratePlan:
     try:
         with connect() as conn:
             return GeneratePlan(**generate(conn, str(body.user_id), body.article_ids, body.selected_article_ids,
-                                           body.minutes, body.mode, body.focus, days=body.days,
+                                           body.minutes, focus=body.focus, days=body.days,
                                            expert_count=body.expert_count,
                                            excluded_article_ids=body.excluded_article_ids))
     except ProfileNotFound:

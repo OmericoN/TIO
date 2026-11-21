@@ -13,7 +13,6 @@ const PanelPlayer = lazy(loadPlayer)
 const defaultProfile = 'Explain what changed and why it matters to a general news listener.'
 const swipeTravel = 16
 
-type Listener = { id: string; name: string; minutes: number | null }
 type ArticleLookup = Record<string, { headline: string; publication: string; language: string }>
 
 async function requestJson<T>(url: string, signal?: AbortSignal, body?: object): Promise<T> {
@@ -36,14 +35,10 @@ async function lookupHeadlines(ids: string[], signal?: AbortSignal): Promise<Hea
   })
 }
 
-export function NewsWorkspace({ owner, onboarding, listenerId }: { owner: string; onboarding?: unknown; listenerId?: string }) {
-  const demo = owner === 'demo'
-  const [demoListeners, setDemoListeners] = useState<Listener[] | null>(null)
-  const [demoListener, setDemoListener] = useState('')
+export function NewsWorkspace({ owner, onboarding, listenerId: userId }: { owner: string; onboarding?: unknown; listenerId?: string }) {
   const [feedError, setFeedError] = useState('')
   const [view, setView] = useState<'feed' | 'briefings' | 'profile'>('feed')
   const [stories, setStories] = useState<Headline[]>([])
-  const [sample, setSample] = useState(true)
   const [historyVersion, setHistoryVersion] = useState(0)
   const [online, setOnline] = useState(false)
   const [savedSettings] = useState(() => loadSettings(owner))
@@ -53,7 +48,6 @@ export function NewsWorkspace({ owner, onboarding, listenerId }: { owner: string
   const interests = [...choices.topics, choices.otherInterests.trim()].filter(Boolean)
   const preferences: Preferences = {
     profile: interests.length ? `Explain what changed and why it matters to a listener interested in ${interests.join(', ')}.` : savedSettings?.preferences.profile ?? defaultProfile,
-    mode: savedSettings?.preferences.mode ?? 'panel',
     minutes: savedSettings?.preferences.minutes ?? 4,
   }
   const [selectedIds, setSelectedIds] = useState<string[]>([])
@@ -66,28 +60,13 @@ export function NewsWorkspace({ owner, onboarding, listenerId }: { owner: string
     listener?: { id: string; articleIds: string[]; selectedIds: string[] } } | null>(null)
   const feed = useRef<Headline[]>([])
   const searchRequest = useRef<AbortController | null>(null)
-  const userId = listenerId || demoListener
-  const waitingForCatalog = demo && demoListeners === null
   const trigger = useRef<HTMLButtonElement>(null)
   const agentControl = useRef<HTMLDivElement>(null)
   const swipe = useRef<{ pointerId: number; x: number; y: number; content: HTMLElement; open: boolean; animate: boolean } | null>(null)
   const selected = selectedIds.map(id => stories.find(story => story.id === id)).filter(story => story !== undefined)
 
+  // Signed-in listeners get their ranked feed. The demo uses the shared story catalog.
   useEffect(() => {
-    if (!demo) return
-    const controller = new AbortController()
-    void requestJson<{ users: Listener[] }>('/api/recommend/catalog', AbortSignal.any([controller.signal, AbortSignal.timeout(5000)]))
-      .then(({ users }) => {
-        setDemoListeners(users)
-        setDemoListener(current => users.some(user => user.id === current) ? current : users[0]?.id ?? '')
-      })
-      .catch(() => { if (!controller.signal.aborted) setDemoListeners([]) })
-    return () => controller.abort()
-  }, [demo])
-
-  // A signed-in (or demo) listener gets articles ranked for them; otherwise the shared story catalog.
-  useEffect(() => {
-    if (waitingForCatalog) return
     const controller = new AbortController()
     setStories([])
     feed.current = []
@@ -105,7 +84,6 @@ export function NewsWorkspace({ owner, onboarding, listenerId }: { owner: string
           if (controller.signal.aborted) return
           feed.current = headlines
           setStories(headlines)
-          setSample(false)
           setRecorded(false)
         } else {
           const catalog = await requestJson<{ sample: boolean; stories: Headline[] }>('/api/panel/stories',
@@ -114,19 +92,18 @@ export function NewsWorkspace({ owner, onboarding, listenerId }: { owner: string
           if (!Array.isArray(catalog.stories)) throw new Error('The story catalog is unavailable.')
           feed.current = catalog.sample ? sampleHeadlines : catalog.stories
           setStories(feed.current)
-          setSample(catalog.sample)
           setRecorded(catalog.sample && (savedSettings?.recorded ?? true))
         }
         setOnline(true)
       } catch (error) {
         if (controller.signal.aborted) return
         if (userId) setFeedError(error instanceof Error ? error.message : 'Recommendations could not be loaded.')
-        else { feed.current = sampleHeadlines; setStories(sampleHeadlines); setSample(true); setRecorded(true) }
+        else { feed.current = sampleHeadlines; setStories(sampleHeadlines); setRecorded(true) }
       }
     }
     void load()
     return () => controller.abort()
-  }, [userId, waitingForCatalog])
+  }, [userId])
 
   // Keep picked headlines visible, so a search never drops a pick.
   function showWithPicks(results: Headline[]) {
@@ -303,13 +280,6 @@ export function NewsWorkspace({ owner, onboarding, listenerId }: { owner: string
           <p>{search.status === 'loading' ? 'Searching the articles…' : search.message}</p>
           <button type="button" className="search-clear" onClick={() => { clearSearch(); setQuestion('') }}>Clear search</button>
         </div>}
-        {demoListeners && demoListeners.length > 0 && <div className="field max-w-md">
-          <label htmlFor="demo-listener">Listener</label>
-          <select id="demo-listener" value={demoListener} onChange={event => setDemoListener(event.target.value)}>
-            {demoListeners.map(listener => <option key={listener.id} value={listener.id}>{listener.name}</option>)}
-            <option value="">Standard feed</option>
-          </select>
-        </div>}
         <h1 className="sr-only">News feed</h1>
         <span role="status" className="sr-only">{notice}</span>
         <section aria-labelledby="stories-title">
@@ -336,7 +306,7 @@ export function NewsWorkspace({ owner, onboarding, listenerId }: { owner: string
         </section>
       </>}
     </section>
-    {launch && <Suspense fallback={<p className="session-loading" role="status">Opening briefing…</p>}><PanelPlayer owner={owner} stories={launch.lineup} listener={launch.listener} preferences={preferences} recorded={recorded} canGenerateSample={sample && online} origin={launch} onClose={() => {
+    {launch && <Suspense fallback={<p className="session-loading" role="status">Opening briefing…</p>}><PanelPlayer owner={owner} stories={launch.lineup} listener={launch.listener} preferences={preferences} recorded={recorded} origin={launch} onClose={() => {
       if (launch.context && launch.context.state !== 'closed') void launch.context.close().catch(() => {})
       setHistoryVersion(v => v + 1)
       setLaunch(null)

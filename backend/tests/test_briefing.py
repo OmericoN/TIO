@@ -26,21 +26,20 @@ class TimingTest(unittest.TestCase):
     def test_story_length_grows_with_outlets_and_is_capped_by_material(self) -> None:
         one = Story(["a"], {"p1"}, 800)
         three = Story(["a", "b", "c"], {"p1", "p2", "p3"}, 2400)
-        self.assertEqual(story_seconds(one), 60)
-        self.assertEqual(story_seconds(three), 110)
-        self.assertEqual(story_seconds(Story(["a"], {"p1"}, 100)), MIN_S)          # thin source: short segment
-        self.assertEqual(story_seconds(Story(list("abcdefghij"), set("abcdefghij"), 99999)), MAX_S)
-        self.assertAlmostEqual(story_seconds(one, mode="debate"), 72)
+        self.assertEqual(story_seconds(one), 72)
+        self.assertEqual(story_seconds(three), 132)
+        self.assertEqual(story_seconds(Story(["a"], {"p1"}, 100)), MIN_S * 1.2)          # thin source: short segment
+        self.assertEqual(story_seconds(Story(list("abcdefghij"), set("abcdefghij"), 99999)), MAX_S * 1.2)
 
     def test_total_adds_intro_outro_and_transitions(self) -> None:
         stories = [Story(["a"], {"p1"}, 800), Story(["b"], {"p1"}, 800)]
-        self.assertEqual(total_seconds(stories), OVERHEAD_S + 2 * (60 + TRANSITION_S))
+        self.assertEqual(total_seconds(stories), OVERHEAD_S + 2 * (72 + TRANSITION_S))
         self.assertEqual(total_seconds([]), 0)
 
     def test_fit_keeps_selected_first_then_ranked_order_within_time(self) -> None:
         stories = [Story([f"s{i}"], {"p"}, 800) for i in range(10)]
         stories[7].selected = True
-        kept, dropped = fit(stories, minutes=3)            # 180 s: 30 + 2 × 65 = 160, a third would be 225
+        kept, dropped = fit(stories, minutes=3)            # 180 s: 30 + 2 × 77 = 184, within the overshoot allowance
         self.assertEqual([s.article_ids[0] for s in kept], ["s7", "s0"])
         self.assertEqual(len(dropped), 8)
 
@@ -57,7 +56,7 @@ class TimingTest(unittest.TestCase):
 
     def test_short_debate_still_has_a_story(self) -> None:
         story = Story(["a"], {"p"}, 800)
-        self.assertEqual(fit([story], minutes=1, mode="debate"), ([story], []))
+        self.assertEqual(fit([story], minutes=1), ([story], []))
 
 
 class GroupingTest(unittest.TestCase):
@@ -85,7 +84,7 @@ class GenerateTest(unittest.TestCase):
               patch("briefing.generate.load_tones", return_value={"keep": "serious"}),
               patch("briefing.generate.pick_hosts", return_value=["calm"]) as pick,
               patch("briefing.generate.recommend", return_value={"article_ids": []}) as refill):
-            plan = generate(conn, "u1", ["keep", "dismissed"], [], 5, "debate", days=2,
+            plan = generate(conn, "u1", ["keep", "dismissed"], [], 5, days=2,
                             excluded_article_ids=["dismissed"])
         load.assert_called_once_with(conn, ["keep"])
         refill.assert_called_once_with(conn, listener, None, excluded_article_ids=["dismissed", "keep"],
@@ -139,7 +138,8 @@ class EndpointTest(unittest.TestCase):
         self.assertIn("post", app.openapi()["paths"]["/api/briefing/generate"])
         uid = "00000000-0000-0000-0000-000000000000"
         GenerateRequest(user_id=uid, article_ids=["a"], minutes=3)
-        for body in ({"user_id": uid, "article_ids": [], "minutes": 10},
+        for body in ({"user_id": uid, "article_ids": ["a"], "minutes": 10, "mode": "presenter"},
+                     {"user_id": uid, "article_ids": [], "minutes": 10},
                      {"user_id": uid, "article_ids": ["a"], "minutes": 0},
                      {"user_id": uid, "article_ids": ["a"], "minutes": 10, "hosts": 2}):
             with self.assertRaises(ValidationError):

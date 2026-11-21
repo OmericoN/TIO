@@ -7,8 +7,7 @@
    rest. Too little: ask the recommender for its next articles (excluding everything already listed) and fit again,
    until the length is filled or nothing new comes back; then the plan is shorter and says so.
 3. Personas: the recommender's ordering for this listener (mostly their past preferences).
-4. Tones and hosts, without an LLM: each article's tone is preset in articles.desired_tone. Hosts = the first 1 (presenter)
-   or 2 (debate) personas in our order whose humor suits the most sensitive tone in the plan (MAX_HUMOR).
+4. Tones and hosts, without an LLM: each article's tone is preset in articles.desired_tone. Choose guest experts whose humor suits the most sensitive tone in the plan (MAX_HUMOR).
 """
 
 import logging
@@ -127,10 +126,9 @@ def pick_hosts(conn, ranked: list[str], tones: dict[str, str], n: int, top_k: in
 
 
 def generate(conn, user_id: str, article_ids: list[str], selected_article_ids: list[str], minutes: float,
-             mode: str = "presenter", focus: str | None = None, *,
+             *, focus: str | None = None,
              days: int | None = None, excluded_article_ids: list[str] = (), expert_count: int = 2) -> dict:
     listener = load_listener(conn, user_id)
-    n_hosts = expert_count if mode == "debate" else 1
     selected = set(selected_article_ids)
     excluded = set(excluded_article_ids) - selected
     ids = list(dict.fromkeys([*selected_article_ids, *(i for i in article_ids if i not in excluded)]))
@@ -139,8 +137,8 @@ def generate(conn, user_id: str, article_ids: list[str], selected_article_ids: l
                              listener.default_persona_id, listener.chosen_persona_ids)
     moderator = conn.execute("select id::text from public.agent_personas where slug = 'main-host'").fetchone()
     moderator_id = moderator[0] if moderator else None
-    candidates = [i for i in persona_ids if mode != "debate" or i != moderator_id]
-    wpm = _pace(conn, candidates[:n_hosts])
+    candidates = [i for i in persona_ids if i != moderator_id]
+    wpm = _pace(conn, candidates[:expert_count])
 
     parsed_focus = parse_focus(focus) if focus else None
     window_days = (parsed_focus.since_days if parsed_focus else None) or days
@@ -148,10 +146,10 @@ def generate(conn, user_id: str, article_ids: list[str], selected_article_ids: l
     articles = load_articles(conn, ids)
     if missing := selected - articles.keys():
         raise UnknownSelectedArticles("Unknown selected articles: " + ", ".join(sorted(missing)))
-    kept, _ = fit(group_stories(ids, articles, selected, event_hours), minutes, wpm, mode)
+    kept, _ = fit(group_stories(ids, articles, selected, event_hours), minutes, wpm)
     added: list[str] = []
     for _ in range(EXTEND_ROUNDS):
-        if total_seconds(kept, wpm, mode) >= FILLED * minutes * 60:
+        if total_seconds(kept, wpm) >= FILLED * minutes * 60:
             break
         new = recommend(conn, listener, parsed_focus, excluded_article_ids=list(excluded) + ids + added,
                         days=days, limit=EXTEND_BATCH)["article_ids"]
@@ -160,11 +158,11 @@ def generate(conn, user_id: str, article_ids: list[str], selected_article_ids: l
         added += new
         articles.update(load_articles(conn, new))
         current = [i for s in kept for i in s.article_ids] + new
-        kept, _ = fit(group_stories(current, articles, selected, event_hours), minutes, wpm, mode)
+        kept, _ = fit(group_stories(current, articles, selected, event_hours), minutes, wpm)
 
     final_ids = [i for s in kept for i in s.article_ids]
     tones = load_tones(conn, final_ids)
-    hosts = pick_hosts(conn, candidates, tones, n_hosts)
+    hosts = pick_hosts(conn, candidates, tones, expert_count)
 
     wpm = _pace(conn, hosts or ([moderator_id] if moderator_id else []))
     in_list = set(ids)
@@ -174,9 +172,9 @@ def generate(conn, user_id: str, article_ids: list[str], selected_article_ids: l
         "persona_ids": persona_ids,
         "hosts": hosts,
         "tones": tones,
-        "segments": [{"article_ids": s.article_ids, "estimated_seconds": round(story_seconds(s, wpm, mode))}
+        "segments": [{"article_ids": s.article_ids, "estimated_seconds": round(story_seconds(s, wpm))}
                      for s in kept],
-        "estimated_minutes": round(total_seconds(kept, wpm, mode) / 60, 1),
+        "estimated_minutes": round(total_seconds(kept, wpm) / 60, 1),
         "requested_minutes": minutes,
         "dropped_article_ids": [i for i in ids if i not in set(final_ids)],
         "added_article_ids": [i for i in final_ids if i not in in_list],

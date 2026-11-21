@@ -19,6 +19,17 @@ from tests.test_briefing import art
 from tests.test_panel import fixture
 
 
+class PlannedPanelValidationTest(unittest.TestCase):
+    def test_planned_panel_accepts_three_or_four_experts(self):
+        hosts = [uuid4() for _ in range(5)]
+        plan = {"segments": [{"article_ids": ["article"], "estimated_seconds": 60}], "tones": {}}
+        for count in (3, 4):
+            start = api.Start(profile="Listener", briefing_plan={**plan, "hosts": hosts[:count]})
+            self.assertEqual(start.briefing_plan.hosts, hosts[:count])
+        with self.assertRaises(ValidationError):
+            api.Start(profile="Listener", briefing_plan={**plan, "hosts": hosts})
+
+
 class MatchedPanelTest(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         self.source = fixture()
@@ -105,20 +116,27 @@ class MatchedPanelTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(panel.roster, self.guests)
 
     async def test_completed_match_cast_and_duration(self):
-        for mode, guests, expected in [("panel", self.guests[:1], self.guests[:1]),
-                                       ("panel", [], []), ("presenter", self.guests, [])]:
-            with self.subTest(mode=mode, guests=guests):
-                self.db.execute.side_effect = [self.cast, self.articles]
-                start = api.Start(profile="Listener", mode=mode, minutes=1, match_result={
-                    "articles": [dict(article_id=i, desired_tone="neutral") for i in self.ids],
-                    "agent_ids": [str(i) for i in guests],
-                })
-                result = await api.start_panel(start)
-                panel = api.sessions.pop(result["id"]).panel
-                self.assertFalse(result["sample"])
-                self.assertEqual([s.headline for s in panel.stories], [self.rates.headline])
-                self.assertEqual(panel.roster, expected)
-                self.get_matcher.assert_not_called()
+        self.db.execute.side_effect = [self.cast, self.articles]
+        start = api.Start(profile="Listener", minutes=1, match_result={
+            "articles": [dict(article_id=i, desired_tone="neutral") for i in self.ids],
+            "agent_ids": [str(i) for i in self.guests[:1]],
+        })
+        result = await api.start_panel(start)
+        panel = api.sessions.pop(result["id"]).panel
+        self.assertFalse(result["sample"])
+        self.assertEqual([s.headline for s in panel.stories], [self.rates.headline])
+        self.assertEqual(panel.roster, self.guests[:1])
+        self.get_matcher.assert_not_called()
+
+
+    async def test_empty_guest_match_cannot_start_a_solo_session(self):
+        self.db.execute.side_effect = [self.cast, self.articles]
+        with self.assertRaises(HTTPException) as exc:
+            await api.start_panel(api.Start(profile="Listener", match_result={
+                "articles": [dict(article_id=i, desired_tone="neutral") for i in self.ids], "agent_ids": [],
+            }))
+        self.assertEqual(exc.exception.status_code, 422)
+        self.assertIn("guest", exc.exception.detail)
 
     async def test_generated_plan_plays_every_selected_story_with_sources(self):
         host_id = str(self.source.host)
@@ -137,7 +155,7 @@ class MatchedPanelTest(unittest.IsolatedAsyncioTestCase):
               patch("briefing.generate.load_articles", return_value=article_rows),
               patch("briefing.generate.load_tones", side_effect=lambda _, ids: dict.fromkeys(ids, "neutral")),
               patch("briefing.generate.pick_hosts", side_effect=lambda _, ranked, tones, n: ranked[:n])):
-            plan = generate(conn, "fixture", article_ids, selected, 1, "debate")
+            plan = generate(conn, "fixture", article_ids, selected, 1)
         self.assertGreater(plan["estimated_minutes"], 1)
         self.assertEqual(plan["hosts"], guests)
         self.assertEqual(list(plan["tones"]), plan["article_ids"])
@@ -155,7 +173,7 @@ class MatchedPanelTest(unittest.IsolatedAsyncioTestCase):
         with patch.object(api, "eleven", return_value=b"mp3"):
             step = api.Step(generation=0)
             for story in panel.stories:
-                for _ in range(2):  # opening and closing at the planned duration
+                for _ in range(2 + len(guests)):  # opening, each booked expert, then closing
                     segment = await api.next_segment(key, step)
                     self.assertEqual(segment["story"], story.headline)
                     card, = segment["sources"]
@@ -167,19 +185,19 @@ class MatchedPanelTest(unittest.IsolatedAsyncioTestCase):
                     step = api.Step(generation=0, heard=segment["id"], seconds=panel.story_budgets[story.id])
             self.assertEqual(await api.next_segment(key, step), {"done": True})
 
-    async def test_planned_presenter_and_more_than_fifteen_sources(self):
+    async def test_planned_panel_with_more_than_fifteen_sources(self):
         article_ids = [f"source-{i}" for i in range(16)]
         source = self.articles[0]
         self.db.execute.side_effect = [self.cast, [{**source, "id": i} for i in article_ids]]
-        start = api.Start(profile="Listener", mode="presenter", minutes=16.5, briefing_plan={
+        start = api.Start(profile="Listener", minutes=16.5, briefing_plan={
             "segments": [{"article_ids": article_ids, "estimated_seconds": 60}],
             "hosts": [self.guests[0]], "tones": {},
         })
         result = await api.start_panel(start)
         panel = api.sessions.pop(result["id"]).panel
-        self.assertEqual(panel.speaker(), self.guests[0])
+        self.assertEqual(panel.speaker(), self.source.host)
         self.assertEqual([a.id for a in panel.story.articles], article_ids)
-        self.assertEqual(panel.roster, [])
+        self.assertEqual(panel.roster, self.guests[:1])
 
     async def test_completed_match_honors_explicit_expert_count(self):
         extra = [self.source.personas[self.guests[0]].model_copy(update={"id": uuid4(), "slug": f"extra-{i}"}) for i in (3, 4)]

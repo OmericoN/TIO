@@ -19,7 +19,7 @@ Build a personalized audio news briefing for the Sourcera track at MAIN AI Hacka
 
 ## Team concept
 
-Start from a headline, give a short host introduction, and play the story in presenter or two-host debate mode. These are presentation formats available independently of listener profiles. During playback, show the active segment's source article and a supporting quote in the fact-check view. The team also sketched a general news feed, story charts or timelines, and a saved-conversation loop. Their scope and some whiteboard details are still open.
+Start from a headline and give a short host introduction. The team chose an expert panel for every listener profile, with Tio moderating the discussion. During playback, show the active segment's source article and a supporting quote in the fact-check view. The team also sketched a general news feed, story charts or timelines, and a saved-conversation loop. Their scope and some whiteboard details are still open.
 
 ## Recommended build
 

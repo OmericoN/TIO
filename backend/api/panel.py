@@ -23,7 +23,7 @@ from fastapi.responses import StreamingResponse
 from psycopg.rows import dict_row
 from pydantic import BaseModel, Field, ValidationError, model_validator
 
-from discussion.panel import EvidenceReview, Panel, Turn, model, passages, review_event, select_stories, source_set, spoken_text
+from discussion.panel import SKIP_REQUEST, EvidenceReview, Panel, Turn, model, passages, review_event, select_stories, source_set, spoken_text
 from discussion.agents import DiscussionLine
 from voice.elevenlabs import request_session
 from discussion import realtime, visuals
@@ -48,7 +48,7 @@ router = APIRouter(prefix="/panel", dependencies=[Depends(local)], tags=["panel"
 
 class Start(BaseModel):
     profile: str = Field(min_length=1, max_length=3000)
-    mode: Literal["panel", "presenter"] = "panel"
+    mode: Literal["panel"] = "panel"
     minutes: float = Field(default=4, ge=1, le=120)
     expert_count: int = Field(default=2, ge=2, le=4, strict=True)
     ranked_guests: dict[str, list[UUID]] | None = None
@@ -150,14 +150,12 @@ def indexed_or_sample_panel(start):
     if host is None:
         raise ValueError("The persona catalog needs a main-host.")
     candidates = [i for i in personas if i != host]
-    if start.mode == "panel" and len(candidates) < start.expert_count:
-        raise ValueError(f"Only {len(candidates)} experts are available. Choose a smaller panel or use presenter mode.")
+    if len(candidates) < start.expert_count:
+        raise ValueError(f"Only {len(candidates)} experts are available. Choose a smaller panel or configure more experts.")
     guests = {}
     tones = {}
     for story in stories:
-        if start.mode == "presenter":
-            ids = []
-        elif start.ranked_guests is not None:
+        if start.ranked_guests is not None:
             ids = start.ranked_guests.get(story.id, [])[:start.expert_count]
         elif INDEX.exists():
             news_ids = [a.id for a in story.articles if not a.official_release]
@@ -169,7 +167,7 @@ def indexed_or_sample_panel(start):
         if len(set(ids)) != len(ids) or any(i not in candidates for i in ids):
             raise ValueError("Invalid guest roster.")
         guests[story.id] = ids
-    return Panel(stories, personas, host, guests, start.profile, start.mode, start.minutes, tones=tones)
+    return Panel(stories, personas, host, guests, start.profile, start.minutes, tones=tones)
 
 
 def make_panel(start):
@@ -179,15 +177,17 @@ def make_panel(start):
         article_ids, guest_ids, _ = test_shortlist()
         result = CompletedMatch.model_validate(matcher().match_personas(article_ids, guest_ids, start.expert_count))
     if start.briefing_plan is not None:
-        panel = planned_panel(start.briefing_plan, start.profile, start.mode, start.minutes)
+        panel = planned_panel(start.briefing_plan, start.profile, start.minutes)
         stage = "session_evidence"
     elif result is not None:
-        panel = matched_panel(result, start.profile, start.mode, start.minutes, model(), start.expert_count)
+        panel = matched_panel(result, start.profile, start.minutes, model(), start.expert_count)
         stage = "session_evidence"
     else:
         panel = indexed_or_sample_panel(start)
         stage = "event_evidence"
-    if (start.mode == "panel" and "expert_count" in start.model_fields_set
+    if any(not roster for roster in panel.guests.values()):
+        raise InvalidMatch("A panel needs at least one matched guest expert per story.")
+    if ("expert_count" in start.model_fields_set
             and any(len(roster) != start.expert_count for roster in panel.guests.values())):
         raise InvalidMatch("There are not enough matched experts for this panel. Choose fewer experts.")
     for story in panel.stories:
@@ -493,7 +493,7 @@ class LiveEnd(BaseModel):
 
 
 class LiveStart(BaseModel):
-    mode: Literal["interrupt", "show"] = "interrupt"
+    mode: Literal["interrupt"] = "interrupt"
 
 
 class LiveAudit(BaseModel):
@@ -514,11 +514,10 @@ async def start_live(key: UUID, body: LiveStart | None = None):
     except (URLError, TimeoutError, ValueError, OSError):
         raise HTTPException(502, "ElevenLabs could not start a live session.") from None
     host = item.panel.personas[item.panel.host]
-    show = body is not None and body.mode == "show"
-    return {"token": token.token, "prompt": item.panel.show_prompt() if show else item.panel.live_prompt(),
+    return {"token": token.token, "prompt": item.panel.live_prompt(),
             "voice_id": host.voice_id, "speaker": host.name,
             "stories": [s.headline for s in item.panel.stories],
-            "max_seconds": round(item.panel.minutes * 60 * 1.5 + 300) if show else 600}
+            "max_seconds": 600}
 
 
 @router.post("/{key}/live/audit")
@@ -544,6 +543,7 @@ async def end_live(key: UUID, body: LiveEnd):
 
 
 class RealtimeStep(BaseModel):
+    question: str = Field(default="", max_length=2000)
     generation: int = Field(ge=0)
     heard: UUID | None = None
     text: str = Field(default="", max_length=4000)      # what the agent actually said
@@ -582,7 +582,6 @@ def plan_turn(panel):
     return token, brief, {"id": token, "speaker_id": str(speaker), "speaker": panel.personas[speaker].name,
                           "host": panel.personas[panel.host].name, "guests": [panel.personas[i].name for i in panel.roster],
                           "story": panel.story.headline, "story_id": panel.story.id,
-                          "brief": realtime.render_brief(panel, brief),
                           "max_seconds": brief.max_seconds, "sources": sources,
                           "visual": visuals.payload(brief.visual, list(cards.values()),
                                                     visuals.story_pictures(panel.story)
@@ -661,7 +660,7 @@ async def realtime_next(key: UUID, step: RealtimeStep):
     item = session(key)
     if item.busy or step.generation != item.generation:
         raise HTTPException(409, "Turn superseded or in progress.")
-    prefetch, item.brief_prefetch = item.brief_prefetch, None
+    prefetch = item.brief_prefetch
     context = None
     if item.brief_pending:
         token, brief, name, cards = item.brief_pending
@@ -675,10 +674,10 @@ async def realtime_next(key: UUID, step: RealtimeStep):
                                  f"with the card's figure." if slips else "")
         if slips:
             log.warning("Live figure slip by %s: %s | line: %s", name, slips, said)
-        item.panel.heard(realtime.brief_turn(brief, said or None), cards, step.seconds or brief.max_seconds,
-                         not step.interrupted)
+        item.panel.heard(realtime.brief_turn(brief, said), cards, step.seconds, bool(said) and not step.interrupted)
         item.brief_pending = None
-        context = realtime.context_update(item.panel, name, said or " ".join(brief.points))
+        context = realtime.context_update(item.panel, name, said)
+    item.brief_prefetch = None
     if step.listener:
         item.panel.live_exchange([(line.role, line.text) for line in step.listener])
         prefetch = None
@@ -688,6 +687,24 @@ async def realtime_next(key: UUID, step: RealtimeStep):
         item.panel.jump_to(target)
         item.panel.history.append(DiscussionLine(speaker=item.panel.personas[item.panel.host].name, text=TEASER))
         prefetch = Prefetch(step.heard, planned.generation, planned.state, planned.task)
+    question = step.question.strip()
+    asked_visual = None
+    if question and item.panel.index < len(item.panel.stories):
+        prefetch = None
+        target = item.panel.requested_story(question)
+        if target is not None or SKIP_REQUEST.search(question):
+            item.panel.jump_to(target if target is not None else len(item.panel.stories))
+        else:
+            item.panel.question, item.panel.question_speaker = question, None
+            item.panel.history.append(DiscussionLine(speaker="Listener", text=question))
+            if visuals.VISUAL_REQUEST.search(question):
+                # Visuals come from the reporting, not from the agents: build what they asked to see from the cards.
+                item.panel.wants_visuals = True
+                try:
+                    asked_visual = await run_in_threadpool(visuals.for_listener, item.panel, question,
+                                                           realtime.story_cards(item.panel))
+                except (MatchProcessingError, ValueError) as exc:
+                    log.warning("Listener visual failed: %s", exc)
     if item.panel.index == len(item.panel.stories):
         return {"done": True, "context": context}
     item.busy = True
@@ -704,6 +721,14 @@ async def realtime_next(key: UUID, step: RealtimeStep):
         if item.generation != step.generation:
             raise HTTPException(409, "Turn superseded.")
         token, brief, payload = result
+        if item.panel.question:
+            item.panel.question_speaker = UUID(payload["speaker_id"])
+        brief = brief.model_copy(update={"max_seconds": min(brief.max_seconds, item.panel.turn_seconds())})
+        if asked_visual:  # the answer comes with what the listener asked to see, and its speaker knows it's up
+            brief = brief.model_copy(update={"visual": asked_visual})
+            payload["visual"] = visuals.payload(asked_visual, realtime.story_cards(item.panel),
+                                                visuals.story_pictures(item.panel.story))
+        payload.update(brief=realtime.render_brief(item.panel, brief), max_seconds=brief.max_seconds)
         item.brief_pending = token, brief, payload["speaker"], payload["sources"]
         start_brief_prefetch(item)
         # The host always knows the current story, even before anyone has spoken.
