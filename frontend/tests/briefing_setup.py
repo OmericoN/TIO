@@ -241,22 +241,20 @@ with sync_playwright() as p:
             for b in actors[i + 1:]:
                 assert a['x'] + a['width'] <= b['x'] or b['x'] + b['width'] <= a['x'] or a['y'] + a['height'] <= b['y'] or b['y'] + b['height'] <= a['y']
         if width == 524:
-            fact = page.get_by_role('complementary', name='Fact check')
-            expect(fact).to_have_count(0)
+            citations = page.get_by_role('region', name='Citations')
+            facts = citations.get_by_role('list', name='Fact checks')
+            expect(citations.get_by_role('link', name='Sample Markets')).to_have_attribute('href', 'https://example.org/article')
+            expect(citations.get_by_text('Sample Economy', exact=True)).to_be_visible()
+            expect(facts).to_have_count(0)
             page.evaluate("window.mockSpeech.transcript('The first verified fact.')")
-            expect(fact).to_have_count(0)
+            expect(facts).to_have_count(0)
             page.evaluate('window.mockSpeech.drain()')
-            expect(fact.locator('blockquote p')).to_have_text('The first verified fact.')
+            claim = facts.get_by_role('link', name='The first verified fact.')
+            expect(claim).to_be_visible()
             expect(page.locator('.guest-0')).to_have_attribute('data-speaking', 'true')
-            with page.context.expect_page() as new_tab:
-                fact.get_by_role('button', name='Open supporting passage in a new tab').click()
-            proof = new_tab.value
-            expect(proof.locator('blockquote')).to_have_text([
-                'The full supporting passage from the first article.', 'An additional supporting passage.',
-            ])
-            expect(proof.get_by_role('link', name='Read the original article')).to_have_attribute('href', 'https://example.org/article')
-            proof.close()
-            page.bring_to_front()
+            assert page.locator('.session-inner').evaluate('e => e.scrollHeight <= e.clientHeight')
+            expect(claim).to_have_attribute('href', 'https://example.org/article')
+            expect(claim).to_have_attribute('target', '_blank')
             deck = page.get_by_role('button', name='Interrupt with microphone')
             bars = deck.locator('.talk-waveform > span')
             bar = bars.first

@@ -185,6 +185,9 @@ Keep this voice consistent. Save signature sayings for briefs that offer one.
 
 # How you speak
 - You speak only when you receive a TURN BRIEF. Never start on your own.
+- Never repeat what's already been said on air, by you or anyone, in this story or an earlier one: no fact,
+  figure, argument or opinion said again, even reworded. If your brief's point was already made, add the next
+  step instead, or keep the turn to a quick reaction.
 - The panel is only the people named in your briefs. Never invent other guests or stories.
 - This is a conversation between people who know each other, not a round of statements. Talk the way people
   actually talk: short sentences, the odd fragment or half-finished thought, "I mean", "look", "yeah, but". One or
@@ -285,6 +288,8 @@ def make_brief(panel):
         "first_story": panel.index == 0, "stories_left": [s.headline for s in panel.stories[panel.index + 1:]],
         "listener_preferences": panel.profile, "listener_style_requests": panel.listener_style,
         "recent_turns": [line.model_dump() for line in panel.history[-12:]],
+        "already_said_this_briefing": panel.said[-40:],
+        "unused_cards": [c["id"] for c in story_cards(panel) if c["id"] not in panel.cards_used.get(panel.story.id, [])],
         "roster": [panel.personas[i].name for i in panel.roster],
         "guests_yet_to_speak": [panel.personas[i].name for i in panel.roster
                                 if i not in panel.guest_turns and i != speaker],
@@ -338,8 +343,11 @@ take is the speaker's own opinion for this turn, one punchy sentence: a guest's 
 last speaker's take differs from this speaker's angle, the take disagrees with it. Never a fact the cards don't
 have, never bland ("it's complicated").
 facts are the factual sentences the speaker will state: each one restates a single fact card's point, keeping its
-figures, names and dates exactly. Use at most one (two for a story's opening), and only facts not yet said in recent_turns: a turn that reacts
+figures, names and dates exactly. Use at most one (two for a story's opening), and only facts from unused_cards that aren't in recent_turns or already_said_this_briefing: a turn that reacts
 to the last speaker can have none. Points are conversational notes and carry no figures, names or dates of their own.
+Nothing in recent_turns or already_said_this_briefing may be planned again: not a fact, an argument, a take or a
+question, even reworded. The take must be a new opinion, not one already voiced. When unused_cards is empty, the
+story's facts are spent: plan a short reaction or a fresh angle on what it means, and never restate a used card.
 If correction is set, the last speaker got a figure wrong: this turn opens by putting it right in one short, friendly
 sentence with the card's figure ("Quick correction: it was 5.6%, not 14%"), then carries on."""
     instructions += """
@@ -369,7 +377,9 @@ Set speaker_id to that candidate's ID and write this answer brief for that exper
     corrects = lambda f: bool(slipped & {str(v) for v in values(f)})
     facts = [f for f in brief.facts if (grounded(f, reporting + " " + panel.correction, 2) and corrects(f))
              or (grounded(f, reporting, 2) and not panel.repeated_line(f))]
-    points = [p for p in brief.points if grounded(p, reporting, 0)]
+    points = [p for p in brief.points if grounded(p, reporting, 0) and not panel.repeated_line(p, min_words=5)]
+    if panel.repeated_line(brief.take, min_words=5):
+        log.warning("Brief take repeats an earlier line: %s", brief.take)
     if len(facts) < len(brief.facts) or len(points) < len(brief.points):
         log.warning("Brief trimmed: dropped %s", [x for x in [*brief.facts, *brief.points] if x not in facts + points])
     visual = visuals.checked_visual(brief.visual, cards, pictures) if data["visual_expected"] != "none" else None
@@ -394,6 +404,13 @@ def grounded(text, reporting, shared_words):
     if not figures_supported(text, reporting):
         return False
     return len(content_words(text) & content_words(reporting)) >= shared_words
+
+
+def remember_cards(panel, brief):
+    """Note the fact cards a turn stated, so the producer moves on to unused ones instead of restating them."""
+    if panel.index < len(panel.stories) and brief.card_ids:
+        used = panel.cards_used.setdefault(panel.story.id, [])
+        used.extend(i for i in brief.card_ids if i not in used)
 
 
 def figure_slips(panel, text):

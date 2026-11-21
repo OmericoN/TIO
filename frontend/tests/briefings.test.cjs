@@ -27,10 +27,17 @@ test('fact checks follow script cues and recompute when seeking backwards', () =
 
 test('live fact checks exclude claims skipped or changed by the speaker', () => {
   const first = { claim: 'Revenue rose 7.1%.' }, other = { ...first }
-  const cards = [{ claim: 'Margins rose.' }, first, other, { claim: 'Revenue rose 7.1% year over year.' }]
+  const cards = [{ claim: 'Margins rose.' }, first, other, { claim: 'Margins narrowed to 4.2% in the quarter.' }]
   assert.deepEqual(heardFactChecks(cards, 'Revenue rose 7.1 percent.'), [first, other])
   assert.deepEqual(heardFactChecks(cards, 'Revenue rose 7.12 percent.'), [])
   assert.deepEqual(heardFactChecks([{ claim: 'Revenue was $27.1 billion.' }], 'Revenue was €27.1 billion.'), [])
+})
+
+test('live fact checks accept a paraphrase that keeps every figure', () => {
+  const starts = { claim: 'Housing starts rose to 1.31 million in October.' }
+  assert.deepEqual(heardFactChecks([starts], 'So starts came in at 1.31 million for October, above forecasts.'), [starts])
+  assert.deepEqual(heardFactChecks([starts], 'So starts came in at 1.3 million for October.'), [])
+  assert.deepEqual(heardFactChecks([starts], 'And 1.31 million is the number everyone is watching.'), [])
 })
 
 test('a claim keeps all its supporting sources and ignores unmapped or empty claims', () => {

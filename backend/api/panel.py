@@ -593,6 +593,7 @@ def start_brief_prefetch(item):
     token, brief, _, cards = item.brief_pending
     panel = item.panel.fork()
     visuals.remember(panel, brief.visual)
+    realtime.remember_cards(panel, brief)
     panel.heard(realtime.brief_turn(brief), cards, brief.max_seconds * 0.8, True)
     if panel.index == len(panel.stories):
         return
@@ -668,6 +669,7 @@ async def realtime_next(key: UUID, step: RealtimeStep):
             raise HTTPException(409, "Acknowledge the active segment first.")
         said = spoken_text(step.text)
         visuals.remember(item.panel, brief.visual)
+        realtime.remember_cards(item.panel, brief)
         # Check the figures the agent actually said; a slip gets corrected on air by the next speaker.
         slips = realtime.figure_slips(item.panel, said)
         item.panel.correction = (f"{name} said {', '.join(slips)}, which the reporting doesn't support. Correct it "

@@ -5,11 +5,11 @@ import { AgentStage } from './AgentStage'
 import { Icon } from './Brand'
 import { BriefingSetup } from './BriefingSetup'
 import { TalkDeck } from './TalkDeck'
-import { FactCheck } from './FactCheck'
-import { audioUrl, factChecksAt, heardFactChecks, historyStore, recordedTurns } from './briefings'
+import { Citations } from './Citations'
+import { audioUrl, factChecksAt, historyStore, recordedTurns } from './briefings'
 import { RealtimeAgent } from './realtime'
-import { VisualHistory, VisualPanel } from './Visual'
-import type { Visual } from './Visual'
+import { VisualStack, visualKey } from './Visual'
+import type { ShownVisual, Visual } from './Visual'
 import type { AgentInfo, Spoken } from './realtime'
 import type { Briefing, Card, DiscussionPlan, Entry, Headline, Preferences, Segment } from './briefings'
 
@@ -104,37 +104,14 @@ export function PanelPlayer({ owner, stories: chosenStories, preferences, record
   const [topic, setTopic] = useState(0)
   const [complete, setComplete] = useState(false)
   const [facts, setFacts] = useState<Card[]>([])
-  const [visual, setVisual] = useState<Visual | null>(null)
-  const [visualLeaving, setVisualLeaving] = useState(false)
-  const [visualPinned, setVisualPinned] = useState(false)
-  const [visualHistory, setVisualHistory] = useState<Visual[]>([])
-  const visualTimers = useRef<number[]>([])
-  const pinnedRef = useRef(false)
+  const [visuals, setVisuals] = useState<ShownVisual[]>([])
+  const [liveVisual, setLiveVisual] = useState('')
 
-  // A visual stays up while its line plays, then fades away a few seconds after, unless the listener keeps it.
-  function showVisual(next: Visual) {
-    visualTimers.current.forEach(clearTimeout)
-    visualTimers.current = []
-    setVisualLeaving(false)
-    pinnedRef.current = false
-    setVisualPinned(false)
-    setVisual(next)
-    setVisualHistory(shown => shown.some(v => v.kind === next.kind && v.title === next.title) ? shown : [...shown, next])
-  }
-
-  function pinVisual(pinned: boolean) {
-    pinnedRef.current = pinned
-    setVisualPinned(pinned)
-    if (!pinned) fadeVisual(3000)
-  }
-
-  function fadeVisual(afterMs: number) {
-    if (pinnedRef.current) return  // kept on screen until the listener lets it go
-    visualTimers.current.forEach(clearTimeout)
-    visualTimers.current = [
-      window.setTimeout(() => setVisualLeaving(true), afterMs),
-      window.setTimeout(() => { setVisual(null); setVisualLeaving(false) }, afterMs + 700),
-    ]
+  // Visuals never fade: each new one is added underneath the earlier ones and stays for the rest of the briefing.
+  function showVisual(next: Visual, story: string) {
+    const key = visualKey(next)
+    setVisuals(shown => shown.some(item => visualKey(item.visual) === key) ? shown : [...shown, { visual: next, story }])
+    setLiveVisual(key)
   }
   const [sample, setSample] = useState(recorded)
   const [speaker, setSpeaker] = useState('')
@@ -562,7 +539,6 @@ export function PanelPlayer({ owner, stories: chosenStories, preferences, record
       if (!agent) throw new Error(`No agent connected for ${turn.speaker}.`)
       if (previousStory.current !== turn.story) {
         setGuests([])
-        pinVisual(false); fadeVisual(0)  // a new story starts without the previous story's visual
         setFacts([])
         if (previousStory.current) await storyCue(cueContext.current ??= new AudioContext())
         previousStory.current = turn.story
@@ -580,21 +556,18 @@ export function PanelPlayer({ owner, stories: chosenStories, preferences, record
       const exactTopic = agenda.findIndex(story => story.id === turn.story_id)
       const nextTopic = exactTopic >= 0 ? exactTopic : agenda.findIndex(story => story.title === turn.story)
       if (nextTopic >= 0) setTopic(nextTopic)
-      if (turn.visual) showVisual(turn.visual)
+      if (turn.visual) showVisual(turn.visual, turn.story)
       const voice = agents.find(a => a.id === turn.speaker_id)?.voice
       const line: Segment = { id: turn.id, story: turn.story, speaker: voice ? `${turn.speaker} · ${voice}` : turn.speaker, host: hostInfo.name,
         guests: turn.guests, text: '…', sources: turn.sources }
       setActive(line)
+      if (turn.sources.length) setFacts(turn.sources)  // the facts this line draws on are listed as soon as it starts
       state.current = agent
       // The transcript appears as the agent improvises it, word by word, rather than as a finished script.
       const said = await agent.speak(turn.brief, turn.max_seconds, text => setActive({ ...line, text }))
       state.current = undefined
       if (rt.current !== state) return
-      if (turn.visual) fadeVisual(3000)
-      if (said.audioDrained) {
-        const heard = heardFactChecks(turn.sources, said.text)
-        if (heard.length) setFacts(heard)
-      }
+      if (turn.visual) setLiveVisual('')
       if (said.text && !said.interrupted) {
         for (const other of state.agents.values()) {
           if (other !== agent) other.context(`ON AIR (context only): ${turn.speaker} said: "${said.text}"`)
@@ -754,7 +727,6 @@ export function PanelPlayer({ owner, stories: chosenStories, preferences, record
               <span className="sr-only">Topic {index + 1}: {story.title}. {complete || index < topic ? 'Completed' : index === topic ? 'In discussion' : 'Upcoming'}</span>
             </li>)}
           </ol>
-          <h2 className="session-headline">{stories[topic].title}</h2>
         </div>}
       </div>
       <AgentStage origin={origin} host={host} guests={guests} speaker={speaker} speech={voice?.speaker === speaker ? voice.stream : null}
@@ -764,6 +736,7 @@ export function PanelPlayer({ owner, stories: chosenStories, preferences, record
         {phase !== 'playing' && <BriefingSetup minutes={minutes} experts={experts} disabled={phase === 'confirming'}
           onMinutes={setMinutes} onExperts={setExperts} />}
       </AgentStage>
+      {begun && <h2 className="session-headline">{stories[topic].title}</h2>}
       <div ref={consolePanel} className="session-console">
       <p role="status" className={loading && status !== 'Press play to listen.' ? 'player-status sr-only' : 'player-status'}>{status || (loading ? 'Loading briefing…' : '')}</p>
       {recorded && (phase !== 'playing' || loading) && <p className={loading ? 'setup-note invisible' : 'setup-note'}>Recorded preview · fixed audio and two experts. Dial settings apply to generated briefings.</p>}
@@ -782,10 +755,8 @@ export function PanelPlayer({ owner, stories: chosenStories, preferences, record
       show(null)
       void next(finished.current)
     }} />
-    {visual && <VisualPanel key={visual.kind + visual.title} visual={visual} leaving={visualLeaving}
-      spoken={active?.text ?? ''} pinned={visualPinned} onPin={pinVisual} />}
-    <VisualHistory visuals={visualHistory} current={visual} onOpen={earlier => { showVisual(earlier); pinVisual(true) }} />
-    {phase === 'playing' && begun && (running || complete) && <FactCheck key={topic} cards={facts} />}
+    <VisualStack visuals={visuals} live={liveVisual} spoken={active?.text ?? ''} />
+    {phase === 'playing' && begun && (running || complete) && <Citations speaking={active?.sources ?? []} cited={facts} story={active?.story ?? stories[topic]?.title ?? ''} />}
     {liveWith && <button type="button" className="button" onClick={() => void finishLive()}>Back to the briefing</button>}
     {phase === 'playing' && running && !recorded && <>
       {!realtimeMode && <button className="button" type="button" disabled={!session.current || scribe.status === 'connecting'}

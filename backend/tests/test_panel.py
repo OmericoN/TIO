@@ -932,3 +932,25 @@ class ConversationTest(unittest.TestCase):
         self.assertIn("What you think", rendered)
         self.assertIn("Reply to what was just said", rendered)
         self.assertNotIn("End by putting a question", rendered)
+
+
+class NoLoopTest(unittest.TestCase):
+    def test_lines_from_earlier_stories_still_count_as_said(self):
+        panel = fixture()
+        said = "Revenue grew six percent this quarter, driven by stronger demand from industrial customers."
+        panel.heard(line(said, handoff=panel.personas[panel.roster[0]].name), [], 5)
+        panel.jump_to(1)                                             # a new story clears the story history…
+        self.assertEqual(panel.history, [])
+        self.assertTrue(panel.repeated_line("So revenue grew six percent this quarter on stronger industrial "
+                                            "customer demand."))  # …but the briefing still remembers it
+        self.assertIsNone(panel.repeated_line("The reserve held its policy rate and signalled patience."))
+        self.assertEqual(panel.fork().said, panel.said)
+
+    def test_used_cards_are_tracked_per_story(self):
+        from discussion import realtime
+        panel = fixture()
+        brief = realtime.TurnBrief(take="A view", goal="g", points=["p"], facts=[], card_ids=["1.1", "1.2"],
+                                   handoff=None, action="respond", max_seconds=10, visual=None)
+        realtime.remember_cards(panel, brief)
+        realtime.remember_cards(panel, brief)
+        self.assertEqual(panel.cards_used[panel.story.id], ["1.1", "1.2"])

@@ -2,8 +2,8 @@
 // The producer picks the visual and the backend checks it against the story's fact cards before it gets here.
 //
 // The card is interactive: the part being talked about lights up as the speaker mentions it, tapping a bar, step
-// or pin shows the exact source quote behind it, Keep stops it fading, and Expand opens it larger.
-import { useEffect, useMemo, useState } from 'react'
+// or pin shows the exact source quote behind it, and Expand opens it larger.
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { FactChart } from './FactChart'
 import type { ChartSpec } from './FactChart'
 
@@ -88,9 +88,7 @@ function PlaceMap({ places, highlight, selected, onSelect }: {
   </svg>
 }
 
-export function VisualPanel({ visual, leaving = false, spoken = '', pinned = false, onPin }: {
-  visual: Visual; leaving?: boolean; spoken?: string; pinned?: boolean; onPin?: (pinned: boolean) => void
-}) {
+export function VisualPanel({ visual, spoken = '' }: { visual: Visual; spoken?: string }) {
   const [broken, setBroken] = useState(false)
   const [selected, setSelected] = useState<number | null>(null)
   const [expanded, setExpanded] = useState(false)
@@ -112,13 +110,10 @@ export function VisualPanel({ visual, leaving = false, spoken = '', pinned = fal
   if (visual.kind === 'picture' && (broken || !visual.picture)) return null
   return <>
     {expanded && <div className="visual-backdrop" onClick={() => setExpanded(false)} aria-hidden="true" />}
-    <figure className="fact-chart" data-leaving={leaving && !pinned && !expanded || undefined} data-expanded={expanded || undefined}
-      aria-label={visual.title}>
+    <figure className="fact-chart" data-kind={visual.kind} data-expanded={expanded || undefined} aria-label={visual.title}>
       <div className="visual-head">
         <figcaption>{visual.title}</figcaption>
         <div className="visual-actions">
-          {onPin && <button type="button" aria-pressed={pinned} onClick={() => onPin(!pinned)}
-            title={pinned ? 'Let it fade with the conversation' : 'Keep it on screen'}>{pinned ? 'Kept' : 'Keep'}</button>}
           <button type="button" onClick={() => setExpanded(!expanded)} aria-expanded={expanded}>{expanded ? 'Close' : 'Expand'}</button>
         </div>
       </div>
@@ -142,14 +137,46 @@ export function VisualPanel({ visual, leaving = false, spoken = '', pinned = fal
   </>
 }
 
-// Every visual shown so far in this briefing, to bring one back.
-export function VisualHistory({ visuals, current, onOpen }: { visuals: Visual[]; current: Visual | null; onOpen: (visual: Visual) => void }) {
-  if (visuals.length < 2) return null
-  return <nav className="visual-history" aria-label="Earlier visuals">
-    <span>Earlier</span>
-    {visuals.map((visual, index) => <button type="button" key={index} aria-current={current?.title === visual.title || undefined}
-      onClick={() => onOpen(visual)}>
-      <span className="visual-kind" aria-hidden="true">{{ chart: '▤', flow: '⋮', map: '◎', picture: '▣' }[visual.kind]}</span>{visual.title}
-    </button>)}
-  </nav>
+export type ShownVisual = { visual: Visual; story: string }
+export const visualKey = (visual: Visual) => visual.kind + ':' + visual.title
+
+// Every visual of the briefing stays, one slide at a time: a new one slides up from below, pushing the last one up,
+// and scrolling or swiping back up (or the dots beside it) brings earlier ones back. Only the visual for the line
+// being spoken lights up what the speaker mentions.
+export function VisualStack({ visuals, live, spoken }: { visuals: ShownVisual[]; live: string; spoken: string }) {
+  const track = useRef<HTMLDivElement>(null)
+  const [shown, setShown] = useState(0)
+  const labelled = new Set(visuals.map(item => item.story)).size > 1
+  const slides = () => [...track.current?.children ?? []] as HTMLElement[]
+
+  function slideTo(index: number) {
+    const slide = slides()[index]
+    if (!slide) return
+    track.current!.scrollTo({ top: slide.offsetTop, behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' })
+  }
+
+  useEffect(() => {
+    const index = visuals.findIndex(item => visualKey(item.visual) === live)
+    if (index >= 0) slideTo(index)
+  }, [live, visuals.length])
+
+  function follow() {
+    const top = track.current!.scrollTop
+    const distances = slides().map(slide => Math.abs(slide.offsetTop - top))
+    setShown(distances.indexOf(Math.min(...distances)))
+  }
+
+  if (!visuals.length) return null
+  return <section className="visual-stack" aria-label="Visuals">
+    <div className="visual-track" ref={track} onScroll={follow}>
+      {visuals.map(({ visual, story }, index) => <div className="visual-item" key={visualKey(visual)}>
+        {labelled && story !== visuals[index - 1]?.story && <p className="visual-story">{story}</p>}
+        <VisualPanel visual={visual} spoken={visualKey(visual) === live ? spoken : ''} />
+      </div>)}
+    </div>
+    {visuals.length > 1 && <nav className="visual-pager" aria-label="Choose a visual">
+      {visuals.map(({ visual }, index) => <button type="button" key={visualKey(visual)} aria-label={'Show ' + visual.title}
+        aria-current={index === shown || undefined} onClick={() => slideTo(index)} />)}
+    </nav>}
+  </section>
 }

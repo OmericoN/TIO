@@ -36,6 +36,8 @@ async function check(browser) {
         evidence: { [id]: { point: 'Compare the same quarter', quotes: [
           { publisher: 'Quarterly report', quote: 'The report uses the prior year quarter.' },
         ] } },
+      } : step.question === 'Which quarter does this cover?' ? {
+        kind: 'flow', title: 'Quarter covered', sources: ['Quarterly report'], steps: ['Third quarter'], step_cards: [id],
       } : null } })
   })
   await page.route('**/src/realtime.ts*', route => route.fulfill({ contentType: 'application/javascript', body: `
@@ -83,17 +85,31 @@ async function check(browser) {
   const visual = page.getByRole('figure', { name: 'How the comparison works' })
   await visual.getByRole('button', { name: 'Compare the same quarter' }).click()
   await visual.getByText('The report uses the prior year quarter.', { exact: false }).waitFor()
-  await visual.getByRole('button', { name: 'Keep' }).click()
-  assert.equal(await page.getByRole('complementary', { name: 'Fact check' }).count(), 0)
+  const facts = page.getByRole('region', { name: 'Citations' }).getByRole('list', { name: 'Fact checks' })
+  await page.getByRole('region', { name: 'Citations' }).getByText('Source turn-2', { exact: true }).waitFor()
+  // The fact the line draws on is listed while it is still being spoken, highlighted as the current line's.
+  await facts.locator('li[data-current]').getByRole('button', { name: 'The report compares the same quarter.' }).waitFor()
   await page.evaluate(() => window.finishPanelTurn())
-  await page.getByRole('complementary', { name: 'Fact check' }).waitFor()
   if (process.env.TIO_TEST_SCREENSHOT) await page.screenshot({ path: process.env.TIO_TEST_SCREENSHOT })
   await activeSpeaker(host.name)
-  assert.equal(await visual.getByRole('button', { name: 'Kept' }).getAttribute('aria-pressed'), 'true')
+  assert.equal(await visual.isVisible(), true, 'a visual stays after its line ends')
   await ask('Which quarter does this cover?')
   await activeSpeaker(guest.name)
   assert.equal(steps[3].question, 'Which quarter does this cover?')
   assert.equal(steps[3].interrupted, true)
+  // A new visual is added underneath the earlier one instead of replacing it.
+  await page.getByRole('figure', { name: 'Quarter covered' }).waitFor()
+  assert.deepEqual(await page.getByRole('region', { name: 'Visuals' }).getByRole('figure').evaluateAll(figures =>
+    figures.map(figure => figure.getAttribute('aria-label'))), ['How the comparison works', 'Quarter covered'])
+  // The new visual slides into view, and the dots slide back up to the earlier one.
+  const slidAt = index => page.waitForFunction(at => {
+    const track = document.querySelector('.visual-track')
+    return Math.abs(track.scrollTop - track.children[at].offsetTop) < 2
+  }, index)
+  await slidAt(1)
+  await page.getByRole('button', { name: 'Show How the comparison works' }).click()
+  await slidAt(0)
+  await page.locator('.visual-pager button[aria-current="true"][aria-label="Show How the comparison works"]').waitFor()
   const entries = await page.evaluate(async () => (await (await import('/src/briefings.ts')).historyStore('demo'))[0].entries)
   const saved = entries.find(entry => entry.id === 'turn-2')
   assert.equal(saved.text, 'The report compares the same quarter.')

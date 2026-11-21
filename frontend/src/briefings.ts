@@ -62,13 +62,24 @@ export function factChecksAt(segment: Segment, fraction: number): Card[] {
   return cues.filter(cue => cue.at === latest).map(cue => cue.card)
 }
 
+const FILLER = new Set(['the', 'and', 'for', 'that', 'this', 'with', 'from', 'was', 'were', 'are', 'has', 'had', 'have',
+  'its', 'his', 'her', 'their', 'said', 'says', 'say', 'who', 'what', 'which', 'but', 'not', 'than', 'into', 'about'])
+
+// Realtime speakers keep every figure as written but may reword around it, so a claim counts as heard when it was
+// said outright, or when every figure and currency sign in it was said along with at least half of its content words
+// (the backend's spoken_claim rule).
 export function heardFactChecks(cards: Card[], transcript: string): Card[] {
-  const words = (text: string) => text.normalize('NFKC').toLowerCase().replace(/%/g, ' percent ')
-    .match(/[+−-]?\p{N}+(?:[.,]\p{N}+)*|\p{L}+|\p{Sc}/gu)?.join(' ') ?? ''
-  const heard = ` ${words(transcript)} `
+  const tokens = (text: string): string[] => text.normalize('NFKC').toLowerCase().replace(/%/g, ' percent ')
+    .match(/[+−-]?\p{N}+(?:[.,]\p{N}+)*|\p{L}+|\p{Sc}/gu) ?? []
+  const said = tokens(transcript)
+  const heard = new Set(said), phrase = ` ${said.join(' ')} `
   return cards.filter(card => {
-    const claim = words(card.claim)
-    return claim !== '' && heard.includes(` ${claim} `)
+    const claim = tokens(card.claim)
+    if (!claim.length) return false
+    if (phrase.includes(` ${claim.join(' ')} `)) return true
+    const words = claim.filter((token, index) => /^\p{L}{3,}$/u.test(token) && !FILLER.has(token) && claim.indexOf(token) === index)
+    if (words.length < 3 || !claim.filter(token => /[\p{N}\p{Sc}]/u.test(token)).every(figure => heard.has(figure))) return false
+    return words.filter(word => heard.has(word)).length * 2 >= words.length
   })
 }
 

@@ -1,3 +1,5 @@
+import type { CSSProperties } from 'react'
+
 // Bars for figures from the story's fact cards. Every value was checked on the backend against the card it names,
 // in one shared unit, so the chart only shows what the reporting says.
 
@@ -15,30 +17,25 @@ function format(value: number, unit: string) {
   return unit === '%' ? `${number}%` : `${number} ${unit}`
 }
 
+// Drawn as HTML rather than a scaled SVG so the labels stay a readable size at any window shape: the bars stretch with
+// the card's width and the rows share its height, getting thinner rather than shrinking the text.
 export function FactChart({ chart, highlight, selected, onSelect }: {
   chart: ChartSpec; highlight?: number | null; selected?: number | null; onSelect?: (index: number) => void
 }) {
   const largest = Math.max(...chart.points.map(point => Math.abs(point.value)), 1e-9)
-  const rowHeight = 30, labelWidth = 128, valueWidth = 72, width = 360
-  const barSpace = width - labelWidth - valueWidth
-  const height = chart.points.length * rowHeight
-  return <svg viewBox={`0 0 ${width} ${height}`} role="group"
+  return <div className="chart-rows" role="group" style={{ '--rows': chart.points.length } as CSSProperties}
     aria-label={chart.points.map(point => `${point.label}: ${format(point.value, chart.unit)}`).join(', ')}>
     {chart.points.map((point, index) => {
-      const y = index * rowHeight
-      const bar = Math.max(2, (Math.abs(point.value) / largest) * barSpace)
       const state = index === selected ? 'selected' : index === highlight ? 'spoken' : undefined
-      return <g key={point.label + index} className={['chart-row', point.value < 0 ? 'negative' : ''].join(' ')}
-        data-state={state} role="button" tabIndex={0} aria-label={`Source for ${point.label}`}
+      return <div key={point.label + index} className={['chart-row', point.value < 0 ? 'negative' : ''].join(' ')}
+        data-state={state} role="button" tabIndex={0} aria-label={`Source for ${point.label}`} title={point.label}
         onClick={() => onSelect?.(index)} onKeyDown={event => { if (event.key === 'Enter' || event.key === ' ') onSelect?.(index) }}>
-        <rect x="0" y={y} width={width} height={rowHeight} className="chart-hit" />
-        <text x={labelWidth - 8} y={y + rowHeight / 2} textAnchor="end" dominantBaseline="middle" className="chart-label">
-          {point.label.length > 18 ? point.label.slice(0, 17) + '…' : point.label}</text>
-        <rect x={labelWidth} y={y + 6} width={bar} height={rowHeight - 12} rx="3" className="chart-bar"
-          style={{ animationDelay: `${index * 90}ms` }} />
-        <text x={labelWidth + bar + 6} y={y + rowHeight / 2} dominantBaseline="middle" className="chart-value">
-          {format(point.value, chart.unit)}</text>
-      </g>
+        <span className="chart-label">{point.label}</span>
+        <span className="chart-track">
+          <span className="chart-bar" style={{ '--share': Math.abs(point.value) / largest, animationDelay: `${index * 90}ms` } as CSSProperties} />
+          <span className="chart-value">{format(point.value, chart.unit)}</span>
+        </span>
+      </div>
     })}
-  </svg>
+  </div>
 }
