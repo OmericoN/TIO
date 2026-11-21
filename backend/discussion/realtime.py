@@ -188,8 +188,10 @@ def render_brief(panel, brief):
     handoff = (f"\nEnd by putting a question to {brief.handoff} by name." if brief.handoff
                else "\nDon't hand over to anyone; just finish your point.")
     _, direction = show_step(panel)
+    last = next((line for line in reversed(panel.history) if line.speaker != panel.personas[panel.speaker()].name), None)
+    heard = f'\nJust said by {last.speaker}: "{last.text}"' if last else ""
     return f"""TURN BRIEF
-Story: {panel.story.headline}
+Story: {panel.story.headline}{heard}
 Your part in the show right now: {direction}
 Goal: {brief.goal}
 Points to make, in your own words:

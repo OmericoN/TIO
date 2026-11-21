@@ -439,6 +439,7 @@ export function PanelPlayer({ owner, stories, preferences, plan, recorded, origi
       const turn = await post<Turn>(`/${id}/realtime/next`, step)
       if (rt.current !== state) return
       if (turn.context) state.host?.context(turn.context)
+      // Every agent hears the panel: each spoken line goes to all of them, so guests can react to each other.
       if (turn.done) { end(); setStatus('Briefing complete.'); return }
       await waitForListener()
       setStatus(liveStatus)
@@ -463,6 +464,9 @@ export function PanelPlayer({ owner, stories, preferences, plan, recorded, origi
       setSpeaker('')
       if (rt.current !== state) return
       if (said.text) {
+        for (const other of state.agents.values()) {
+          if (other !== agent) other.context(`ON AIR (not addressed to you unless named): ${turn.speaker} said: "${said.text}"`)
+        }
         const spoken = { ...line, text: said.text }
         setActive(spoken)
         save(spoken)

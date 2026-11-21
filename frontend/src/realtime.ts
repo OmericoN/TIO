@@ -102,7 +102,10 @@ export class RealtimeAgent {
       this.turn = { resolve, text: '', started: performance.now(), onText,
         timer: window.setTimeout(() => this.finish(false), (maxSeconds + 25) * 1000) }
       this.requesting = true
-      this.send({ type: 'response.create', response: { instructions: brief } })
+      // The brief goes into the conversation, not into response.instructions: those would replace the agent's
+      // persona instructions for this reply, and it would speak as nobody in particular.
+      this.note(brief)
+      this.send({ type: 'response.create' })
     })
   }
 
@@ -115,15 +118,17 @@ export class RealtimeAgent {
   }
 
   /** Background context the agent remembers but doesn't answer, e.g. what was just said on the panel. */
-  context(text: string) {
+  context(text: string) { this.note(text) }
+
+  private note(text: string) {
     this.send({ type: 'conversation.item.create', item: { type: 'message', role: 'system',
       content: [{ type: 'input_text', text }] } })
   }
 
   /** The host answers the listener out loud (spoken questions arrive transcribed; typed ones as they are). */
   answer(question: string) {
-    this.send({ type: 'response.create', response: { instructions:
-      `LISTENER QUESTION: "${question}". Answer them now, following your instructions and your latest CONTEXT UPDATE.` } })
+    this.note(`LISTENER QUESTION: "${question}". Answer them now, following your instructions and your latest CONTEXT UPDATE.`)
+    this.send({ type: 'response.create' })
   }
 
   /** Push-to-talk: open the microphone and start a fresh recording. */
