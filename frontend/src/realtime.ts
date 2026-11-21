@@ -22,6 +22,14 @@ export class RealtimeAgent {
   private turn: { resolve: (spoken: Spoken) => void; text: string; started: number; timer: number;
     onText?: (text: string) => void; onStart?: () => void; audible?: boolean } | null = null
   private replying = new Set<string>()
+  // Asides: quick reactions while someone else holds the floor ("Mm-hmm", "Oh, come on"). They're out-of-band
+  // replies, kept out of the agent's conversation, and never mistaken for its turn.
+  private asides = new Set<string>()
+  private requestingAside = false
+  private reacting = false
+  private ignoreStops = 0
+  private asideAudible = false
+  private onAside?: (text: string) => void
   readonly audio = new Audio()
 
   private microphone: MediaStream | null = null
@@ -62,19 +70,24 @@ export class RealtimeAgent {
     switch (event.type) {
       case 'response.created':
         if (!id) break
-        if (this.requesting) { this.own.add(id); this.requesting = false } else this.replying.add(id)
+        if (this.requestingAside) { this.asides.add(id); this.requestingAside = false }
+        else if (this.requesting) { this.own.add(id); this.requesting = false } else this.replying.add(id)
         break
       case 'response.output_audio_transcript.delta':
         if (id && this.own.has(id) && this.turn) { this.turn.text += event.delta ?? ''; this.turn.onText?.(this.turn.text) }
         break
       case 'response.output_audio_transcript.done':
-        if (id && this.own.has(id) && this.turn) this.turn.text = event.transcript ?? this.turn.text
+        if (id && this.asides.has(id)) { if (event.transcript?.trim()) this.onAside?.(event.transcript.trim()) }
+        else if (id && this.own.has(id) && this.turn) this.turn.text = event.transcript ?? this.turn.text
         else if (id && this.replying.has(id) && event.transcript?.trim()) this.handlers.onReply?.(event.transcript.trim())
         break
       case 'response.done':
+        if (id && this.asides.has(id) && event.response?.status !== 'completed') this.reacting = false
         if (id && this.own.has(id) && event.response?.status === 'cancelled') this.finish(true)
         break
       case 'output_audio_buffer.started':
+        if (id && this.asides.has(id)) { this.asideAudible = true; break }
+        if (!id && this.reacting && !this.turn) { this.asideAudible = true; break }
         if (this.turn && !this.turn.audible) {
           this.turn.audible = true
           this.turn.started = performance.now()
@@ -82,8 +95,15 @@ export class RealtimeAgent {
         }
         break
       case 'output_audio_buffer.stopped':
-        if (this.turn) this.finish(false)
+        if (id && this.asides.has(id)) { this.asides.delete(id); this.reacting = false; this.asideAudible = false; break }
+        if (!id && this.ignoreStops > 0) { this.ignoreStops--; this.reacting = false; break }  // a cancelled aside
+        if (this.turn && (!id || this.own.has(id))) this.finish(false)
         else if (this.replying.size) { this.replying.clear(); this.handlers.onReplyDone?.() }
+        else this.reacting = false
+        break
+      case 'error':
+        // A refused aside must not leave the agent stuck "reacting"; turns report their own failures by timing out.
+        if (this.requestingAside || (this.reacting && !this.asideAudible)) { this.requestingAside = false; this.reacting = false }
         break
       case 'input_audio_buffer.speech_started':
         this.handlers.onListenerStart?.()
@@ -105,6 +125,7 @@ export class RealtimeAgent {
   /** Speaks a turn brief in the agent's own words; resolves when its audio has finished playing or was cut off. */
   speak(brief: string, maxSeconds: number, onText?: (text: string) => void, onStart?: () => void): Promise<Spoken> {
     this.finish(true)
+    this.dropAside()
     return new Promise(resolve => {
       this.turn = { resolve, text: '', started: performance.now(), onText, onStart,
         timer: window.setTimeout(() => this.finish(false), (maxSeconds + 25) * 1000) }
@@ -116,8 +137,35 @@ export class RealtimeAgent {
     })
   }
 
+  /** A quick reaction over whoever is talking, at most a few words, in character. Skipped if the agent is busy. */
+  react(cue: string, onAside?: (text: string) => void) {
+    if (this.turn || this.reacting || this.replying.size) return
+    this.reacting = true
+    this.requestingAside = true
+    this.onAside = onAside
+    this.send({ type: 'response.create', response: {
+      conversation: 'none', max_output_tokens: 40, output_modalities: ['audio'],
+      instructions: `You are ${this.info.name}, on air in a lively news panel, reacting while someone else is talking. `
+        + 'Say only a short, natural reaction of one to four words, in character and in your accent: agreement, doubt, '
+        + 'a scoff, surprise or a laugh ("Mm-hmm.", "Oh, come on.", "Exactly.", "Hm, not so sure.", "Ha!"). '
+        + 'No facts, no figures, no full sentences.',
+      input: [{ type: 'message', role: 'user', content: [{ type: 'input_text', text: cue }] }],
+    } })
+  }
+
+  private dropAside() {
+    if (!this.reacting) return
+    this.send({ type: 'response.cancel' })
+    this.send({ type: 'output_audio_buffer.clear' })
+    if (this.asideAudible) this.ignoreStops++  // only a playing aside sends a stop event to swallow
+    this.asideAudible = false
+    this.reacting = false
+    this.requestingAside = false
+  }
+
   /** Stops the agent mid-sentence, e.g. because the listener started talking. */
   cancel() {
+    this.dropAside()
     if (!this.turn) return
     this.send({ type: 'response.cancel' })
     this.send({ type: 'output_audio_buffer.clear' })
