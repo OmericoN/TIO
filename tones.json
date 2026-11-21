@@ -4,6 +4,7 @@
     "serious": "Use measured, direct language for credible threats to people or livelihoods.",
     "neutral": "Report straightforward facts in an even voice.",
     "analytical": "Explain figures, market moves, and their significance.",
+    "cautious": "Make uncertainty audible when a forecast, conditional outcome, or unverified claim is central to the article.",
     "upbeat": "Use a positive delivery for clearly good news without material harm."
   }
 }
