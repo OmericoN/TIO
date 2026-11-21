@@ -103,12 +103,12 @@ export function PanelPlayer({ owner, stories, preferences, plan, recorded, origi
     idle?: number; finishing?: boolean; micWasOn: boolean } | null>(null)
   const [liveWith, setLiveWith] = useState('')
   // Experimental live host: the whole briefing runs over one speech-to-speech session, fed fact cards by the backend.
-  const liveShow = preferences.mode === 'live' && !recorded
+  const liveShow = false  // this branch runs every briefing as the realtime panel
   // Experimental realtime panel: a speech-to-speech agent per speaker, each speaking from briefs the backend plans.
   // On this experiment branch every generated briefing is live: panel and presenter formats both run as realtime
   // agents (presenter = the host alone). Only the 'live' format keeps its single ElevenLabs session, and the
   // recorded sample still plays its fixed audio.
-  const realtimeMode = !recorded && preferences.mode !== 'live'
+  const realtimeMode = !recorded  // whatever the saved format: a host plus guests, each a separate live voice
   const rt = useRef<{ agents: Map<string, RealtimeAgent>; host?: RealtimeAgent; microphone: MediaStream | null;
     current?: RealtimeAgent; listening: boolean; exchange: { role: 'listener' | 'host'; text: string }[];
     quiet?: number; release?: () => void } | null>(null)
@@ -324,7 +324,7 @@ export function PanelPlayer({ owner, stories, preferences, plan, recorded, origi
     setStatus('Preparing your briefing…')
     try {
       const lineup = plan ? { briefing_plan: plan } : { story_ids: stories.map(s => s.id) }
-      const mode = preferences.mode === 'live' || preferences.mode === 'presenter' ? 'presenter' : 'panel'
+      const mode = 'panel'
       const result = await post<{ id: string; sample: boolean }>('', { ...preferences, mode, ...lineup })
       if (generation.current !== gen) {
         await fetch('/api/panel/' + result.id, { method: 'DELETE' })
@@ -389,6 +389,7 @@ export function PanelPlayer({ owner, stories, preferences, plan, recorded, origi
     connected.forEach(agent => state.agents.set(agent.info.id, agent))
     state.host = state.agents.get(hostInfo.id)
     setHost(hostInfo.name)
+    console.info('Realtime panel voices', Object.fromEntries(agents.map(a => [a.name, a.voice])))
     const liveStatus = `Live · ${agents.length} realtime ${agents.length === 1 ? 'voice' : 'voices'}${microphone ? ' · just speak to join in' : ''}`
     setStatus(liveStatus)
     const waitForListener = () => state.listening
@@ -415,7 +416,8 @@ export function PanelPlayer({ owner, stories, preferences, plan, recorded, origi
       }
       setGuests(turn.guests)
       setSpeaker(turn.speaker)
-      const line: Segment = { id: turn.id, story: turn.story, speaker: turn.speaker, host: hostInfo.name,
+      const voice = agents.find(a => a.id === turn.speaker_id)?.voice
+      const line: Segment = { id: turn.id, story: turn.story, speaker: voice ? `${turn.speaker} · ${voice}` : turn.speaker, host: hostInfo.name,
         guests: turn.guests, text: '…', sources: turn.sources }
       setActive(line)
       state.current = agent

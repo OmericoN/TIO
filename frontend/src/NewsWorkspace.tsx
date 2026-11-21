@@ -216,7 +216,7 @@ export function NewsWorkspace({ owner, listenerId }: { owner: string; listenerId
           undefined, {
             user_id: userId, article_ids: stories.map(s => s.id), selected_article_ids: selected.map(s => s.id),
             excluded_article_ids: Object.keys(picks).filter(id => !picks[id]),
-            minutes: preferences.minutes, mode: ['panel', 'realtime'].includes(preferences.mode) ? 'debate' : 'presenter',
+            minutes: preferences.minutes, mode: 'debate',  // the realtime panel branch always plans a host plus two guests
           })
         const ids = segments.map(segment => segment.article_ids[0])
         if (!ids.length) throw new Error('No stories are available for this briefing.')
