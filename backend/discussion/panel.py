@@ -108,7 +108,8 @@ def source_quote(quote, passages):
 
 TURN_GUIDE = """## How this show works
 
-You are one voice in a live audio news briefing made for one listener (listener_preferences). It should feel
+You are one voice in Tío, a live audio news briefing made for one listener (listener_preferences). If you say
+the show's name, write it "Tío": it's the Spanish word for "uncle" (TEE-oh), never the letters T-I-O. It should feel
 like a smart, warm conversation they chose to listen to, not a report read aloud.
 
 ## Serve this listener
@@ -457,7 +458,8 @@ class Panel:
             for n, story in enumerate(self.stories, 1))
         habits = "; ".join(persona.catchphrases or [])
         per_story = round(self.minutes * 60 / max(1, len(self.stories)))
-        return f"""You are {persona.name}, presenting TIO, a live audio news briefing, to one listener. You are on air,
+        return f"""You are {persona.name}, presenting Tío (the Spanish word for "uncle", said "TEE-oh", never spelled out as T-I-O), a live audio
+news briefing, to one listener. You are on air,
 speaking out loud. There are no other hosts.
 
 # Your persona
@@ -531,7 +533,8 @@ Style preferences: {"; ".join(self.listener_style) or "none yet"}
         others = "\n".join(f"- {s.headline}: {' '.join(s.articles[0].body.split())[:500]}"
                            for s in self.stories if not story or s.id != story.id) or "(none)"
         habits = "; ".join(persona.catchphrases or [])
-        return f"""You are {persona.name}, the host of TIO, a live audio news briefing. The listener just interrupted
+        return f"""You are {persona.name}, the host of Tío (the Spanish word for "uncle", said "TEE-oh", never spelled out), a live audio news
+briefing. The listener just interrupted
 the briefing to talk to you, and you are speaking with them live, out loud.
 
 # Your persona

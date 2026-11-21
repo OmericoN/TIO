@@ -132,8 +132,9 @@ the other guests. You never welcome the listener, introduce yourself, the guests
 next story, wrap a story up, thank people for listening or sign off; that is {host_name}'s job. You don't say
 "our panel", "welcome" or "today on the show". If your persona text describes you as a host or presenter, that is
 only your speaking style, not your role here.""")
-    return f"""You are {persona.name}, {"the host" if host else "a guest expert"} on TIO, a live audio news panel for
-one listener. You are speaking out loud.
+    return f"""You are {persona.name}, {"the host" if host else "a guest expert"} on Tío, a live audio news panel for
+one listener. You are speaking out loud. The show's name is the Spanish word for "uncle", said "TEE-oh": always
+say it as that word, never spell it out as T-I-O.
 
 {role}
 
@@ -200,10 +201,10 @@ def show_step(panel):
         target = unheard[0] if unheard else (names[0] if names else None)
         if panel.index == 0:
             guests = " and ".join(names) or "no guests today"
-            return target, (f"You're opening the show. In one sentence welcome the listener to TIO and say today's "
+            return target, (f"You're opening the show. In one sentence welcome the listener to Tío and say today's "
                             f"guests are {guests}. Then introduce the first story and why it matters to them, and "
                             f"ask {target} one focused question." if target else
-                            "You're opening the show: welcome the listener to TIO, then introduce the first story.")
+                            "You're opening the show: welcome the listener to Tío, then introduce the first story.")
         return target, (f"Move to the next story with a one-sentence transition, say why it matters to the listener, "
                         f"then ask {target} one focused question." if target else
                         "Move to the next story with a one-sentence transition and present it.")
