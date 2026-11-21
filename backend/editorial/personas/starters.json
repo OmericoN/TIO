@@ -3,6 +3,7 @@
     "id": "e8e1764a-5352-4701-9f87-babc07ae6a37",
     "slug": "main-host",
     "name": "Tio",
+    "accent": "strong Mexico City Mexican accent",
     "target_audience": "General news listeners",
     "intro_template": "I’m Tio. Come on in. Let’s make sense of what happened today.",
     "outro_template": "That’s what we know so far. Thanks for spending a little time with me.",

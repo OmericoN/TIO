@@ -728,7 +728,7 @@ async def realtime_next(key: UUID, step: RealtimeStep):
         token, brief, payload = result
         if item.panel.question:
             item.panel.question_speaker = UUID(payload["speaker_id"])
-        brief = brief.model_copy(update={"max_seconds": min(brief.max_seconds, item.panel.turn_seconds())})
+        brief = brief.model_copy(update={"max_seconds": min(brief.max_seconds, realtime.time_cap(item.panel))})
         if asked_visual:  # the answer comes with what the listener asked to see, and its speaker knows it's up
             brief = brief.model_copy(update={"visual": asked_visual})
             payload["visual"] = visuals.payload(asked_visual, realtime.story_cards(item.panel),

@@ -741,9 +741,25 @@ class StoryIntroductionTest(unittest.TestCase):
         with patch.object(realtime, "model") as provider, \
                 patch.object(realtime.visuals, "story_pictures", return_value={}):
             provider.return_value.generate.return_value = intro
-            self.assertEqual(realtime.make_brief(panel).max_seconds, realtime.INTRO_SECONDS)
+            self.assertEqual(realtime.make_brief(panel).max_seconds, realtime.OPENING_SECONDS)  # the show's opening
             panel.heard(line("Welcome. Here's what happened.", handoff=panel.personas[panel.roster[0]].name), [], 25)
             self.assertEqual(realtime.make_brief(panel).max_seconds, realtime.MAX_SECONDS)
+            panel.jump_to(1)
+            self.assertEqual(realtime.make_brief(panel).max_seconds, realtime.INTRO_SECONDS)    # a later story's setup
+
+    def test_a_short_briefing_still_gives_the_opening_its_full_time(self):
+        # 4 minutes over 3 stories with 4 experts left the opening (welcome, guests, agenda and the first story's
+        # setup) about 13 seconds, so the voice always ran long and the turn timed out.
+        from discussion import realtime
+        panel = fixture()
+        panel.minutes = 4
+        panel.stories = [*panel.stories, panel.stories[0].model_copy(update={"id": "third"})]
+        guests = panel.guests[panel.stories[0].id]
+        panel.guests = {story.id: [*guests, *guests] for story in panel.stories}   # four seats
+        self.assertLess(panel.turn_seconds(), 15)
+        self.assertEqual(realtime.time_cap(panel), realtime.OPENING_SECONDS)
+        panel.phase, panel.next_guest = "guest", guests[0]
+        self.assertEqual(realtime.time_cap(panel), min(realtime.MAX_SECONDS, panel.turn_seconds()))
 
 
 class AgendaTest(unittest.TestCase):

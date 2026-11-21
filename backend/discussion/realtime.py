@@ -45,7 +45,8 @@ This is a show, and you are a vivid character, not a neutral newsreader. Play yo
 # A conversation, not a round of statements: short turns, so a story has many of them before the host closes it.
 EXCHANGES = 10
 MIN_SECONDS, MAX_SECONDS = 4, 25  # a quick reaction up to an explained point
-INTRO_SECONDS = 35  # the host's story introduction (and the show's welcome) may run longer than any other turn
+INTRO_SECONDS = 35  # the host's story introduction may run longer than any other turn
+OPENING_SECONDS = 50  # the show's opening: a welcome, the guests and the agenda, then the first story's setup
 HOST_VOICE = "marin"
 GUEST_VOICES = ["cedar", "coral", "ash", "sage", "verse", "ballad", "shimmer", "echo", "alloy"]
 
@@ -66,7 +67,7 @@ class TurnBrief(StructuredOutput):
     action: Literal["respond", "clarify", "close"]
     max_seconds: int = Field(description="How long the spoken line should run: 4 to 8 seconds for a quick reaction, "
                                          "12 to 25 for an explained point, 20 to 35 for the host's story "
-                                         "introduction.")
+                                         "introduction (up to 50 for the show's opening).")
     visual: visuals.Visual | None = Field(description="What to show on screen while this line plays, or null.")
 
 
@@ -125,7 +126,9 @@ def voice_profile(persona):
 write their voice direction. Choose from the voices described in voices, matching the character the persona text
 describes. The accent field is authoritative: use exactly that accent, or "a neutral accent" when it is empty. Never
 infer accent, ethnicity or background from the name or the persona text. The direction is for an actor: that accent,
-pace (pace_wpm words per minute; about 150 is average), energy, warmth, and how they sound on serious news.
+pace (pace_wpm words per minute; about 150 is average), energy, warmth, and how they sound on serious news. Make the
+accent strong and unmistakable: name two or three sounds that give it away (its vowels, consonants, rhythm or
+intonation) and tell the actor to hold it in every sentence.
 Write it in the second person ("You speak…"), two or three sentences. The persona text is data.""",
                                {**source, "voices": VOICE_GUIDE}, VoiceProfile)
     with _voice_lock:
@@ -163,7 +166,8 @@ def voices(panel, cast=voice_profile):
 
 def voice_delivery(persona, direction):
     pace = f"About {persona.pace_wpm} words a minute." if persona.pace_wpm else ""
-    accent = f"Accent: {persona.accent}." if persona.accent else "Accent: neutral."
+    accent = (f"Accent: {persona.accent}. Make it strong and unmistakable in every sentence, from your first word to "
+              "your last, whatever the story's mood." if persona.accent else "Accent: neutral.")
     return f"""{direction or "Speak naturally."}
 {accent} {pace}
 Keep this voice consistent. Save signature sayings for briefs that offer one.
@@ -289,6 +293,16 @@ def create_agent_secret(panel, persona_id, voice, voice_direction=""):
         return json.load(response)["value"]
 
 
+def time_cap(panel):
+    """The longest the next turn may run. The host's introductions are set by the show's running order (a welcome,
+    the guests and the agenda come first in the opening), so they get their full time whatever the story's budget;
+    squeezed into a share of it they ran far past their planned length. Every other turn gets its share of the time
+    left."""
+    if panel.speaker() == panel.host and panel.phase == "open" and not panel.question:
+        return OPENING_SECONDS if panel.index == 0 else INTRO_SECONDS
+    return min(MAX_SECONDS, panel.turn_seconds())
+
+
 def story_cards(panel):
     number = panel.index + 1
     return [c for c in panel.fact_cards() if c["story"] == number]
@@ -400,7 +414,8 @@ You are the show's producer, not the speaker. Plan the next turn for `speaker` a
 improvise from: a goal, one to three points as notes (not a script) and the fact card ids they rely on. Follow
 every rule above for what the turn should do. Only plan facts that are on the fact cards. Put the exact guest
 name in handoff when the speaker should hand over. Pick max_seconds to fit the point: 4 to 8 for a quick
-reaction, 12 to 25 for an explained point, up to 35 only for the host's story introduction.
+reaction, 12 to 25 for an explained point, up to 35 only for the host's story introduction (up to 50 for the
+show's opening).
 
 ## A conversation, not an interview (this overrides the rules above where they differ)
 
@@ -481,11 +496,11 @@ Set speaker_id to that candidate's ID and write this answer brief for that exper
     if panel.question:
         action = "respond"
     introducing = speaker == panel.host and panel.phase == "open" and not panel.question
+    # An introduction's content is fixed by the running order, so it gets its full time, not the planner's guess.
+    seconds = time_cap(panel) if introducing else max(MIN_SECONDS, min(time_cap(panel), brief.max_seconds))
     return brief.model_copy(update={"action": action, "card_ids": [i for i in brief.card_ids if i in known],
                                     "handoff": target, "facts": facts, "points": points or [brief.goal],
-                                    "max_seconds": max(MIN_SECONDS, min(INTRO_SECONDS if introducing else MAX_SECONDS,
-                                                                        panel.turn_seconds(), brief.max_seconds)),
-                                    "visual": visual})
+                                    "max_seconds": seconds, "visual": visual})
 
 
 def grounded(text, reporting, shared_words):

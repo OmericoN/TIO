@@ -107,6 +107,7 @@ class StoredPreviewTest(unittest.TestCase):
         session, response = (json.loads(call.args[0]) for call in socket.send.call_args_list)
         self.assertEqual(session["session"]["audio"]["output"]["voice"], "sage")
         self.assertIn("Measured and warm.\nAccent: Irish.", response["response"]["instructions"])
+        self.assertIn("Make it strong and unmistakable in every sentence", response["response"]["instructions"])
         with TemporaryDirectory() as directory:
             clip = Path(directory) / "ada.wav"
             save_wav(clip, audio)
