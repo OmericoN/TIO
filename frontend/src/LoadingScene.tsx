@@ -19,7 +19,7 @@ export function LoadingScene({ stories, steps, current }: { stories: Headline[];
   return <>
     <div className="loading-scene" aria-hidden="true">
       {story && <div key={shown} className="loading-card" data-side={shown % 2 ? 'right' : 'left'}>
-        {story.thumb_url && <img src={story.thumb_url} alt="" referrerPolicy="no-referrer" onError={event => event.currentTarget.remove()} />}
+        {story.thumb_url && <img src={story.thumb_url} alt="" referrerPolicy="no-referrer" onError={event => { event.currentTarget.hidden = true }} />}
         <span><small>{story.topic || 'Headline'}</small><strong>{story.title}</strong></span>
       </div>}
       {story && <span key={'gulp' + shown} className="loading-gulp" />}
