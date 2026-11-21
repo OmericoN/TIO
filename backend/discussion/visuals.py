@@ -249,15 +249,24 @@ def payload(visual, cards, pictures):
     def outlets(card_ids):
         return list(dict.fromkeys(s["publisher"] for i in card_ids if i in by_id for s in by_id[i]["sources"]))
 
+    def quotes(card_ids):
+        return {i: {"point": by_id[i]["point"], "quotes": [{"publisher": s["publisher"], "quote": s["quote"][:400],
+                                                            "url": s.get("url")} for s in by_id[i]["sources"]]}
+                for i in dict.fromkeys(card_ids) if i in by_id}
+
     shown = {"kind": visual.kind, "title": visual.title}
     if visual.kind == "chart":
         chart = visual.chart
-        return {**shown, "chart": chart.model_dump(), "sources": outlets([p.card_id for p in chart.points])}
+        ids = [p.card_id for p in chart.points]
+        return {**shown, "chart": chart.model_dump(), "sources": outlets(ids), "evidence": quotes(ids)}
     if visual.kind == "flow":
-        return {**shown, "steps": [s.label for s in visual.flow], "sources": outlets([s.card_id for s in visual.flow])}
+        ids = [s.card_id for s in visual.flow]
+        return {**shown, "steps": [s.label for s in visual.flow], "step_cards": ids, "sources": outlets(ids),
+                "evidence": quotes(ids)}
     if visual.kind == "map":
-        return {**shown, "places": [p.model_dump(exclude={"card_id"}) for p in visual.places],
-                "sources": outlets([p.card_id for p in visual.places])}
+        ids = [p.card_id for p in visual.places]
+        return {**shown, "places": [p.model_dump() for p in visual.places], "sources": outlets(ids),
+                "evidence": quotes(ids)}
     photo = pictures[visual.picture_article_id]
     return {**shown, "picture": {"url": photo["url"], "caption": photo["headline"]}, "sources": [photo["publisher"]]}
 

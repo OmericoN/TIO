@@ -776,7 +776,7 @@ class CutInTest(unittest.IsolatedAsyncioTestCase):
                 generation=0, heard=guest["id"], text="Growth looks durable because", seconds=6, cut_off=True))
             self.assertEqual(len(plans), 3)                               # served instantly from the prefetch
             self.assertTrue(item.panel.history[-1].text.endswith("because—"))
-            self.assertIn("cutting in on", cutter["brief"])
+            self.assertIn("barging in on", cutter["brief"])
             await item.brief_prefetch.task
 
     def test_the_next_guest_usually_cuts_in_on_the_first_guests_answer(self):
@@ -792,6 +792,8 @@ class CutInTest(unittest.IsolatedAsyncioTestCase):
             brief = realtime.make_brief(panel)
             self.assertTrue(brief.cut_off)                               # the first guest's answer gets cut into
             self.assertIn("Your take", realtime.render_brief(panel, brief))
-            panel.heard(realtime.brief_turn(brief, "Growth looks durable because—"), [], 8)
-            panel.cut_in = True
-            self.assertFalse(realtime.make_brief(panel).cut_off)        # never two cut-ins in a row
+            for speaker in panel.roster:                                  # two interruptions in a row…
+                panel.history.append(DiscussionLine(speaker=panel.personas[speaker].name, text="But that's—"))
+            panel.phase, panel.next_guest = "guest", first
+            self.assertFalse(realtime.make_brief(panel).cut_off)        # …and the third speaker gets to finish
+            self.assertIn("You were cut off last time", realtime.render_brief(panel, brief))

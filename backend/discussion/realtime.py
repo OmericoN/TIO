@@ -41,7 +41,11 @@ This is a show, and you are a vivid character, not a neutral newsreader. Play yo
 - Contrast: sound nothing like the other speakers. Listeners should know who is talking with their eyes closed.
 - Limits that never change: the facts stay exactly as the brief and cards give them, you keep to your time, and on
   somber or serious stories you dial the energy down while keeping your character and accent."""
-CUT_IN_CHANCE = 0.7  # how often the next guest cuts in on the first guest's answer in a story
+# Crosstalk: the next guest almost always cuts in on the first guest's answer in a story, any later turn may get cut
+# into too, and up to MAX_CUT_CHAIN interruptions can follow one another before someone gets to finish.
+CUT_IN_CHANCE = 0.95
+LATER_CUT_IN_CHANCE = 0.5
+MAX_CUT_CHAIN = 2
 HOST_VOICE = "marin"
 GUEST_VOICES = ["cedar", "coral", "ash", "sage", "verse", "ballad", "shimmer", "echo", "alloy"]
 
@@ -194,8 +198,10 @@ Keep this voice consistent in every turn.
 - React to what the previous speaker said, by name, when the brief says so.
 - Have opinions. Take a clear side, say it plainly, and push back on the other speakers when you see it
   differently. Don't agree to be polite, never say "great point", and don't summarise what they said: answer it.
-- When your brief says you're cutting in, start mid-thought with a short interjection ("Hang on—", "No, wait—",
-  "Sorry, but—") and go straight at their point. If someone cuts in on you, let it go.
+- When your brief says you're cutting in, barge in hard, mid-thought, with no apology: "No, no, no—", "Come on—",
+  "Hold on, that's not—", "Wait, wait—". Go straight at their point, louder and faster for the first few words.
+- If your brief says you were cut off, you can push back first ("Let me finish—", "Can I finish?") and land your
+  point anyway, or fire straight back at whoever cut you off.
 - Don't introduce yourself or say your own name.
 - You can't draw or show anything yourself. Charts, photos, maps and flow charts appear on the listener's screen
   by themselves and speak for themselves. Talk to the listener, not about the screen: mention a visual at most
@@ -303,6 +309,7 @@ def make_brief(panel):
         "visual_expected": visuals.expected(panel, pictures),
         "correction": panel.correction or None,
         "you_are_cutting_in": panel.cut_in,
+        "you_were_cut_off": any(line.speaker == persona.name and line.text.endswith("—") for line in panel.history[-4:]),
     }
     instructions = TURN_GUIDE + """
 
@@ -332,11 +339,12 @@ have, never bland ("it's complicated").
 facts are the factual sentences the speaker will state: each one restates a single fact card's point, keeping its
 figures, names and dates exactly. Use at most two, and only facts not yet said in recent_turns: a turn that reacts
 to the last speaker can have none. Points are conversational notes and carry no figures, names or dates of their own.
-If you_are_cutting_in is true, the speaker is interrupting the last one mid-sentence: plan a short, punchy
-turn that opens by cutting in on their point (8 to 15 seconds). Set cut_off for the speaker you're planning when
-the next speaker in the running order would naturally jump in: a strong disagreement, a claim worth challenging,
-or this speaker going on too long. Roughly one turn in three; never on the show's opening, a story's opening
-question or a closing, and never twice in a row.
+If you_are_cutting_in is true, the speaker is barging in on the last one mid-sentence: plan a short, combative
+turn (8 to 15 seconds) that attacks their point straight away. If you_were_cut_off is true, the speaker was
+interrupted last time: they may insist on finishing their point, or turn on whoever cut in. Set cut_off whenever
+the next speaker would jump in: any disagreement, a claim worth challenging, or this speaker going on too long.
+This is a lively, argumentative show: interruptions are frequent. Never on the show's opening, a story's opening
+question or a closing.
 If correction is set, the last speaker got a figure wrong: this turn opens by putting it right in one short, friendly
 sentence with the card's figure ("Quick correction: it was 5.6%, not 14%"), then carries on."""
     brief = model().generate("realtime_brief", instructions, data, TurnBrief)
@@ -361,11 +369,16 @@ sentence with the card's figure ("Quick correction: it was 5.6%, not 14%"), then
     # Openings and closings run to the end; the host's closing isn't cut, and no two cut-ins in a row.
     # A cut-in slot, like the visuals: in each story the next guest usually jumps in on the first guest's answer,
     # and the producer may add others.
-    first_guest_answer = (panel.speaker() != panel.host and panel.phase == "guest" and target is not None
-                          and target != panel.personas[panel.host].name and not any(
-                              line.text.endswith("—") for line in panel.history))
-    cut_off = ((brief.cut_off or (first_guest_answer and random.random() < CUT_IN_CHANCE))
-               and panel.phase not in {"open", "close"} and not panel.cut_in and not panel.question)
+    guest_turn = panel.speaker() != panel.host and panel.phase == "guest" and target is not None
+    first_cut = not any(line.text.endswith("—") for line in panel.history)
+    chain = 0
+    for line in reversed(panel.history):  # interruptions in a row so far
+        if not line.text.endswith("—"):
+            break
+        chain += 1
+    slot = guest_turn and random.random() < (CUT_IN_CHANCE if first_cut else LATER_CUT_IN_CHANCE)
+    cut_off = ((brief.cut_off or slot) and panel.phase not in {"open", "close"} and chain < MAX_CUT_CHAIN
+               and not panel.question)
     return brief.model_copy(update={"card_ids": [i for i in brief.card_ids if i in known], "handoff": target,
                                     "cut_off": cut_off,
                                     "facts": facts, "points": points or [brief.goal],
@@ -410,8 +423,11 @@ def render_brief(panel, brief):
     on_screen = (f"\nJust appeared on the listener's screen: {visuals.describe(brief.visual)}. You may nod to it once "
                  f"in a few words (\"it's on your screen\"); don't describe it. Your point matters more."
                  if brief.visual and brief.visual.kind != "picture" else "")
-    cutting = (f"\nYou're cutting in on {last.speaker} mid-sentence: open with a short interjection and go straight "
-               f"at their point." if panel.cut_in and last else "")
+    cutting = (f"\nYou're barging in on {last.speaker} mid-sentence: cut them off hard and go straight at their "
+               f"point." if panel.cut_in and last else "")
+    me = panel.personas[panel.speaker()].name
+    if any(line.speaker == me and line.text.endswith("—") for line in panel.history[-4:]):
+        cutting += "\nYou were cut off last time: you may insist on finishing your point first."
     return f"""TURN BRIEF
 {role}{cutting}{on_screen}
 Story: {panel.story.headline}{heard}
