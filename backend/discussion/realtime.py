@@ -18,6 +18,22 @@ from discussion.panel import TURN_GUIDE, Turn, model
 from research.matcher import REPO_ROOT, StructuredOutput
 
 REALTIME_MODEL = os.getenv("PANEL_REALTIME_MODEL", "gpt-realtime")
+# How strongly the live voices play their characters: "extreme" (default) or "natural".
+PERSONA_STYLE = os.getenv("PANEL_PERSONA_STYLE", "extreme").strip().lower()
+
+# Appended to every live agent's instructions in "extreme" mode: a shared direction to play each persona as large
+# as it will go, so the panel sounds like distinct, unmistakable characters.
+EXTREME_PERFORMANCE = """# Performance: turn it all the way up
+This is a show, and you are a vivid character, not a neutral newsreader. Play your persona at full intensity:
+- Accent: make your accent strong and unmistakable in every sentence: its vowels, rhythm, intonation and stress.
+  Keep it authentic and respectful. Never use broken English, fake grammar mistakes, slurs or cultural jokes.
+- Personality: push every trait in your persona to the extreme. Warm becomes beaming; dry becomes bone-dry;
+  curious becomes delighted; measured becomes slow and deliberate. Let it colour every line.
+- Speech patterns: lean into them. Use your habits often and audibly, with your own pauses, fillers and emphasis.
+- Delivery: big dynamic range. Change pace, pitch and volume for emphasis; let reactions be audible.
+- Contrast: sound nothing like the other speakers. Listeners should know who is talking with their eyes closed.
+- Limits that never change: the facts stay exactly as the brief and cards give them, you keep to your time, and on
+  somber or serious stories you dial the energy down while keeping your character and accent."""
 HOST_VOICE = "marin"
 GUEST_VOICES = ["cedar", "coral", "ash", "sage", "verse", "ballad", "shimmer", "echo", "alloy"]
 
@@ -146,8 +162,11 @@ say it as that word, never spell it out as T-I-O.
 Keep this voice consistent in every turn.
 
 # Your speech patterns
-Follow these naturally, a couple of times a turn where they fit, never forced or in every sentence:
+{"Use these often and audibly; they're part of who you are:" if PERSONA_STYLE == "extreme"
+ else "Follow these naturally, a couple of times a turn where they fit, never forced or in every sentence:"}
 {patterns}
+
+{EXTREME_PERFORMANCE if PERSONA_STYLE == "extreme" else ""}
 
 # How you speak
 - You speak only when you receive a TURN BRIEF (or, as the host, a LISTENER QUESTION). Never start on your own.
