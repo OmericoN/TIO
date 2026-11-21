@@ -373,3 +373,16 @@ class ListenerIntentTest(unittest.TestCase):
         panel.question, panel.phase = "Tell me more", "guest"
         panel.heard(self.answer("deeper"), [], 2)
         self.assertEqual(panel.seconds, 44)  # 100 + 2 + 2 heard, minus a minute
+
+
+class HandoffTest(unittest.TestCase):
+    def test_the_named_guest_speaks_next_even_with_a_loose_handoff(self):
+        for handoff, text in [("Leila", "Over to you."), (None, "Priya made a point. Leila, what do you make of it?"),
+                              ("leila grant", "Thoughts?")]:
+            panel = fixture()
+            first, second = panel.roster
+            panel.personas[first] = panel.personas[first].model_copy(update={"name": "Priya Shah"})
+            panel.personas[second] = panel.personas[second].model_copy(update={"name": "Leila Grant"})
+            panel.heard(line(text, handoff=handoff), [], 2)
+            with self.subTest(handoff=handoff):
+                self.assertEqual(panel.next_guest, second)
