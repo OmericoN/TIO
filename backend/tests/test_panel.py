@@ -14,7 +14,7 @@ from fastapi import HTTPException
 from api import panel as api
 from discussion.costs import project
 from discussion.agents import DiscussionLine
-from discussion.panel import Citation, EvidenceReview, Finding, Panel, SpokenCitation, Turn, Verdict, evidence, passages, review_event, spoken_claim, spoken_text, figures_supported
+from discussion.panel import AnswerTurn, Citation, EvidenceReview, Finding, Panel, SpokenCitation, Turn, Verdict, evidence, passages, review_event, spoken_claim, spoken_text, figures_supported
 from discussion.personas import load_starter_personas
 from discussion.stories import Group, Groups, group_articles, load_index
 
@@ -343,3 +343,33 @@ class HoldingTest(unittest.TestCase):
         self.assertEqual(first, second)
         self.assertEqual(voice.call_count, len(api.HOLDING_LINES))   # the second session reused the cache
         self.assertTrue(all(len(line.split()) >= 20 for line in api.HOLDING_LINES))
+
+
+class ListenerIntentTest(unittest.TestCase):
+    def answer(self, intent, style=None):
+        return AnswerTurn(text="Sure.", citations=[], handoff=None, action="respond", listener_intent=intent,
+                          style_request=style)
+
+    def test_questions_use_the_answer_schema_and_style_requests_last(self):
+        panel = fixture()
+        panel.question = "What does that even mean?"
+        author = Mock()
+        author.generate.return_value = self.answer("simpler", "Explain terms in plain words.")
+        panel.draft(author, Mock())
+        self.assertIs(author.generate.call_args.args[3], AnswerTurn)
+        self.assertIn("listener_intent", author.generate.call_args.args[1])
+        panel.heard(author.generate.return_value, [], 2)
+        self.assertEqual(panel.listener_style, ["Explain terms in plain words."])
+        author.generate.return_value = line("Back to the panel.")
+        panel.draft(author, Mock())
+        self.assertIs(author.generate.call_args.args[3], Turn)
+        self.assertEqual(author.generate.call_args.args[2]["listener_style_requests"], ["Explain terms in plain words."])
+
+    def test_skip_wraps_the_story_and_deeper_buys_time(self):
+        panel = fixture()
+        panel.question, panel.seconds = "Can we move on?", 100
+        panel.heard(self.answer("skip"), [], 2)
+        self.assertEqual(panel.phase, "close")
+        panel.question, panel.phase = "Tell me more", "guest"
+        panel.heard(self.answer("deeper"), [], 2)
+        self.assertEqual(panel.seconds, 44)  # 100 + 2 + 2 heard, minus a minute
