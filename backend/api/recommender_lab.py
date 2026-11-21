@@ -49,18 +49,18 @@ class LookupRequest(BaseModel):
 
 @router.post("/api/recommend/lookup")
 def lookup(body: LookupRequest, request: Request) -> dict:
-    """Headline, outlet, language, date and link for article ids."""
+    """Headline, outlet, language, date, link and publisher photo for article ids."""
     _local_only(request)
     with connect() as conn:
         rows = conn.execute(
             """
             select a.id, a.headline, p.name, a.language::text, a.published_at, a.permalink, a.translation_of,
-                   a.main_subject, a.people
+                   a.main_subject, a.people, case when a.thumb_url ~ '^https?://' then a.thumb_url end
             from public.articles a join public.publications p on p.id = a.publication_id
             where a.id = any(%s)
             """,
             (body.article_ids,),
         ).fetchall()
     keys = ["id", "headline", "publication", "language", "published_at", "permalink", "translation_of",
-            "main_subject", "people"]
+            "main_subject", "people", "thumb_url"]
     return {r[0]: {**dict(zip(keys, r)), "published_at": r[4].isoformat()} for r in rows}

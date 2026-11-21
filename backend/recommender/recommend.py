@@ -23,6 +23,8 @@ Personal score = 0.60 · similarity to the listener (the best of their blended p
 Events are picked with maximal marginal relevance, so one theme doesn't crowd out the others. A little random noise
 (EXPLORATION) is added to the scores first, so each call samples a different list among the close matches.
 Every listener is a signed-up user (user_id); there is no anonymous mode.
+The listener's vector is built from their profile text, tilted toward the topics they rated on the interest radar
+(profiles.interest_levels, 1 somewhat .. 3 very interested), and blended with their listening history once they have one.
 OpenAI is used for embeddings only: the listener (once, then cached on the profile), the focus and exclusions.
 """
 
@@ -68,6 +70,9 @@ EXCLUDE_SIM_MIN = 0.50      # ... and this close to an exclusion is removed
 RELATED_MIN = 0.35          # below this an article isn't related to the focus: real matches score ~0.45-0.6 against
                             # it, padding like generic market wraps 0.23-0.32
 HISTORY_SHARE = 0.5         # weight of listening history vs. profile text in a hybrid vector
+RADAR_SHARE = 0.4           # weight of the interest radar vs. the profile text in the onboarding vector: the rated
+                            # topics' embeddings, each counted in proportion to its level, so "very interested" pulls
+                            # three times as hard as "somewhat"
 RISK_WORDS = {1: "very cautious", 2: "cautious", 3: "balanced", 4: "growth-seeking", 5: "speculative"}
 
 
@@ -123,18 +128,43 @@ def profile_text(profile: dict) -> str:
 PROFILE_KEYS = ["interests_text", "listener_goal", "occupation", "country", "risk_appetite", "preferred_language",
                 "secondary_languages", "briefing_length_minutes", "interest_embedding", "interest_embedding_source",
                 "interest_embedding_model", "past_articles_embedding", "past_article_ids", "default_persona_id",
-                "stale", "chosen_persona_ids"]
+                "stale", "chosen_persona_ids", "interest_levels"]
 
 
-def ensure_user_embedding(conn, user_id: str, embed=embed_query, persist: bool = True) -> tuple[list[float], dict]:
-    """The user's interest vector, rebuilt first when missing, from another model, or older than their history."""
+def radar_levels(profile: dict) -> dict[str, int]:
+    """The topics the listener rated on the interest radar, with their level 1-3."""
+    levels = profile.get("interest_levels") or {}
+    return {topic: int(level) for topic, level in levels.items() if level in (1, 2, 3)}
+
+
+def onboarding_vector(profile: dict, embed=embed_query, embed_batch=embed_many) -> list[float] | None:
+    """The profile text as a vector, tilted toward the radar: each rated topic's embedding counts in proportion
+    to its level. None when the profile has neither text nor a radar."""
+    text = profile_text(profile)
+    levels = radar_levels(profile)
+    vector = normalize(embed(text)) if text else None
+    if not levels:
+        return vector
+    topics = list(levels)
+    weights = np.array([levels[t] for t in topics], dtype=float)
+    radar = normalize((weights[:, None] * np.array(embed_batch(topics))).sum(axis=0).tolist())
+    if vector is None:
+        return radar
+    return normalize([(1 - RADAR_SHARE) * o + RADAR_SHARE * r for o, r in zip(vector, radar)])
+
+
+def ensure_user_embedding(conn, user_id: str, embed=embed_query, persist: bool = True, rebuild: bool = False,
+                          embed_batch=embed_many) -> tuple[list[float], dict]:
+    """The user's interest vector, rebuilt first when missing, from another model, or older than their history
+    (or always, with `rebuild`)."""
     row = conn.execute(
         """
         select interests_text, listener_goal, occupation, country, risk_appetite,
                preferred_language::text, secondary_languages::text[], briefing_length_minutes,
                interest_embedding::text, interest_embedding_source, interest_embedding_model,
                past_articles_embedding::text, coalesce(past_article_ids, '{}'), default_persona_id::text,
-               coalesce(interest_embedded_at < past_articles_updated_at, false), chosen_persona_ids::text[]
+               coalesce(interest_embedded_at < past_articles_updated_at, false), chosen_persona_ids::text[],
+               coalesce(interest_levels, '{}'::jsonb)
         from public.profiles where id = %s
         """,
         (user_id,),
@@ -143,11 +173,11 @@ def ensure_user_embedding(conn, user_id: str, embed=embed_query, persist: bool =
         raise ProfileNotFound(user_id)
     profile = dict(zip(PROFILE_KEYS, row))
 
-    if profile["interest_embedding"] and profile["interest_embedding_model"] == EMBED_MODEL and not profile["stale"]:
+    if not rebuild and profile["interest_embedding"] and profile["interest_embedding_model"] == EMBED_MODEL \
+            and not profile["stale"]:
         return from_pgvector(profile["interest_embedding"]), profile
 
-    text = profile_text(profile)
-    onboarding = normalize(embed(text)) if text else None
+    onboarding = onboarding_vector(profile, embed, embed_batch)
     history = normalize(from_pgvector(profile["past_articles_embedding"])) \
         if profile["past_articles_embedding"] else None
     if onboarding and history:

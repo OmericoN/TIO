@@ -85,5 +85,75 @@ class ProfileEmbedTest(unittest.TestCase):
         self.assertEqual(caught.exception.status_code, 422)
 
 
+class FakeConnection:
+    def __init__(self, row):
+        self.row, self.sql, self.params, self.committed = row, None, None, False
+
+    def execute(self, sql, params):
+        self.sql, self.params = sql, params
+        return self
+
+    def fetchone(self):
+        return self.row
+
+    def commit(self):
+        self.committed = True
+
+
+def connection_returning(row):
+    conn = FakeConnection(row)
+
+    @contextmanager
+    def fake():
+        yield conn
+
+    return fake, conn
+
+
+class ProfileInterestsTest(unittest.TestCase):
+    def test_routes_are_registered(self) -> None:
+        paths = app.openapi()["paths"]["/api/profile/interests"]
+        self.assertIn("get", paths)
+        self.assertIn("put", paths)
+
+    def test_interest_list_puts_the_strongest_topics_first(self) -> None:
+        levels = {"Technology": 2, "Artificial intelligence": 3, "Currencies": 1, "Science and space": 3}
+        self.assertEqual(profile.interests_text(levels, "  Dutch   housing "),
+                         "Artificial intelligence, Science and space, Technology, Currencies, Dutch housing")
+        self.assertIsNone(profile.interests_text({}, " "))
+
+    def test_levels_outside_the_radar_are_rejected(self) -> None:
+        for levels in ({"Technology": 4}, {"Technology": 0}, {"A, B": 2}, {"": 1},
+                       {f"Topic {i}": 1 for i in range(41)}):
+            with self.subTest(levels=levels), self.assertRaises(ValueError):
+                profile.InterestUpdate(levels=levels)
+
+    def test_saving_rewrites_the_interest_list_and_drops_a_stale_vector(self) -> None:
+        fake_urlopen, _ = supabase_returns({"id": USER_ID})
+        saved = {"Artificial intelligence": 3, "Technology": 1}
+        fake, conn = connection_returning((saved, "Artificial intelligence, Technology, City budgets"))
+        body = profile.InterestUpdate(levels={"Technology": 1, "Artificial intelligence": 3}, other="City budgets")
+        with patch.dict(os.environ, ENV), patch.object(profile, "urlopen", fake_urlopen), \
+                patch.object(profile, "connect", fake):
+            result = profile.save_interests(body, "Bearer token-123")
+        levels, text, compared, compared_levels, user_id = conn.params
+        self.assertEqual(levels.obj, {"Technology": 1, "Artificial intelligence": 3})
+        self.assertEqual(text, "Artificial intelligence, Technology, City budgets")
+        self.assertEqual(compared, text)
+        self.assertEqual(compared_levels.obj, levels.obj)
+        self.assertEqual(user_id, USER_ID)
+        self.assertIn("or interest_levels is distinct from", conn.sql)
+        self.assertTrue(conn.committed)
+        self.assertEqual(result.levels, saved)
+
+    def test_reading_without_a_profile_is_404(self) -> None:
+        fake_urlopen, _ = supabase_returns({"id": USER_ID})
+        fake, _ = connection_returning(None)
+        with patch.dict(os.environ, ENV), patch.object(profile, "urlopen", fake_urlopen), \
+                patch.object(profile, "connect", fake), self.assertRaises(HTTPException) as caught:
+            profile.read_interests("Bearer token-123")
+        self.assertEqual(caught.exception.status_code, 404)
+
+
 if __name__ == "__main__":
     unittest.main()

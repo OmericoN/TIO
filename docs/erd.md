@@ -53,7 +53,8 @@ erDiagram
         uuid default_persona_id FK
         text_arr followed_publication_ids
         uuid_arr chosen_persona_ids "3 picked at sign-up"
-        text interests_text
+        text interests_text "strongest radar topics first"
+        jsonb interest_levels "topic to 1-3, radar"
         vector1536 interest_embedding
         text interest_embedding_source "onboarding, behavior, hybrid"
         text interest_embedding_model

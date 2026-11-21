@@ -51,9 +51,9 @@ class FakeConn:
 
 
 def profile_row(*, interests="ECB decisions and the euro", goal="FX trading", country="NL", risk=4,
-                embedding=None, model=None, history=None, stale=False):
+                embedding=None, model=None, history=None, stale=False, levels=None):
     return (interests, goal, None, country, risk, "en", ["nl"], 10,
-            embedding, None, model, history, ["seen-1"], None, stale, [])
+            embedding, None, model, history, ["seen-1"], None, stale, [], levels or {})
 
 
 class ListenerTest(unittest.TestCase):
@@ -85,6 +85,21 @@ class ListenerTest(unittest.TestCase):
         stale = FakeConn(profile_row(embedding="[1, 0]", model=EMBED_MODEL, stale=True))
         ensure_user_embedding(stale, "u1", embed=lambda t: [0.0, 1.0])
         self.assertEqual(len(stale.writes), 1)
+
+    def test_radar_tilts_the_vector_toward_the_strongest_topics(self) -> None:
+        topics = {"Currencies": [0.0, 1.0], "Technology": [0.0, -1.0]}
+        conn = FakeConn(profile_row(levels={"Currencies": 3, "Technology": 1}))
+        vector, _ = ensure_user_embedding(conn, "u1", embed=lambda t: [1.0, 0.0],
+                                          embed_batch=lambda names: [topics[n] for n in names])
+        self.assertGreater(vector[1], 0)  # 3 x Currencies outweighs 1 x Technology
+        self.assertGreater(vector[0], vector[1])  # the profile text still leads
+        radar_only = FakeConn(profile_row(interests=None, goal=None, country=None, risk=None, levels={"Technology": 2}))
+        self.assertEqual(ensure_user_embedding(radar_only, "u1", embed_batch=lambda names: [[0.0, -1.0]])[0], [0.0, -1.0])
+
+    def test_rebuild_ignores_a_current_vector(self) -> None:
+        conn = FakeConn(profile_row(embedding="[1, 0]", model=EMBED_MODEL))
+        self.assertEqual(ensure_user_embedding(conn, "u1", embed=lambda t: [0.0, 2.0], rebuild=True)[0], [0.0, 1.0])
+        self.assertEqual(len(conn.writes), 1)
 
     def test_empty_profile_without_history_is_rejected(self) -> None:
         with self.assertRaises(NoProfileSignal):

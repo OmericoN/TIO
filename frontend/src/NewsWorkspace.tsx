@@ -3,6 +3,7 @@ import type { PointerEvent as ReactPointerEvent } from 'react'
 import { AudioRibbon, Brand, Icon } from './Brand'
 import { Briefings } from './BriefingHistory'
 import { Orb } from './Orb'
+import { interestsFromProfile, interestsText } from './InterestFields'
 import { listenerChoicesKey, loadListenerChoices, loadSettings, Profile } from './Profile'
 import type { ListenerChoices } from './Profile'
 import { sampleHeadlines } from './briefings'
@@ -13,7 +14,7 @@ const PanelPlayer = lazy(loadPlayer)
 const defaultProfile = 'Explain what changed and why it matters to a general news listener.'
 const swipeTravel = 16
 
-type ArticleLookup = Record<string, { headline: string; publication: string; language: string }>
+type ArticleLookup = Record<string, { headline: string; publication: string; language: string; thumb_url?: string | null }>
 
 async function requestJson<T>(url: string, signal?: AbortSignal, body?: object): Promise<T> {
   const response = await fetch(url, body ? {
@@ -31,11 +32,16 @@ async function lookupHeadlines(ids: string[], signal?: AbortSignal): Promise<Hea
   const articles = await requestJson<ArticleLookup>('/api/recommend/lookup', signal, { article_ids: ids })
   return ids.flatMap(id => {
     const article = articles[id]
-    return article ? [{ id, title: article.headline, topic: article.publication, summary: article.language.toUpperCase() }] : []
+    return article ? [{ id, title: article.headline, topic: article.publication, summary: article.language.toUpperCase(),
+      thumb_url: article.thumb_url }] : []
   })
 }
 
-export function NewsWorkspace({ owner, onboarding, listenerId: userId }: { owner: string; onboarding?: unknown; listenerId?: string }) {
+export function NewsWorkspace({ owner, onboarding, listenerId: userId, email, accessToken, onSignOut }: {
+  owner: string; onboarding?: unknown; listenerId?: string; email?: string
+  accessToken?: () => Promise<string | undefined>
+  onSignOut?: () => void
+}) {
   const [feedError, setFeedError] = useState('')
   const [view, setView] = useState<'feed' | 'briefings' | 'profile'>('feed')
   const [stories, setStories] = useState<Headline[]>([])
@@ -45,9 +51,10 @@ export function NewsWorkspace({ owner, onboarding, listenerId: userId }: { owner
   const [recorded, setRecorded] = useState(savedSettings?.recorded ?? true)
   const [choices, setChoices] = useState(() => loadListenerChoices(owner, onboarding))
   const [storageError, setStorageError] = useState(false)
-  const interests = [...choices.topics, choices.otherInterests.trim()].filter(Boolean)
+  const [syncNotice, setSyncNotice] = useState('')
+  const interests = interestsText(choices.levels, choices.otherInterests)
   const preferences: Preferences = {
-    profile: interests.length ? `Explain what changed and why it matters to a listener interested in ${interests.join(', ')}.` : savedSettings?.preferences.profile ?? defaultProfile,
+    profile: interests ? `Explain what changed and why it matters to a listener interested in ${interests}.` : savedSettings?.preferences.profile ?? defaultProfile,
     minutes: savedSettings?.preferences.minutes ?? 4,
   }
   const [selectedIds, setSelectedIds] = useState<string[]>([])
@@ -64,6 +71,14 @@ export function NewsWorkspace({ owner, onboarding, listenerId: userId }: { owner
   const agentControl = useRef<HTMLDivElement>(null)
   const swipe = useRef<{ pointerId: number; x: number; y: number; content: HTMLElement; open: boolean; animate: boolean } | null>(null)
   const selected = selectedIds.map(id => stories.find(story => story.id === id)).filter(story => story !== undefined)
+  const choicesNow = useRef(choices)
+  const selectedNow = useRef(selectedIds)
+  const searchNow = useRef(search)
+  selectedNow.current = selectedIds
+  searchNow.current = search
+  const interestsEdited = useRef(false)
+  const feedStale = useRef(false)
+  const pendingSync = useRef<number | undefined>(undefined)
 
   // Signed-in listeners get their ranked feed. The demo uses the shared story catalog.
   useEffect(() => {
@@ -225,12 +240,96 @@ export function NewsWorkspace({ owner, onboarding, listenerId: userId }: { owner
       listener: userId ? { id: userId, articleIds: stories.map(story => story.id), selectedIds } : undefined })
   }
 
-  function saveChoices(next: ListenerChoices) {
+  function storeChoices(next: ListenerChoices) {
+    choicesNow.current = next
     setChoices(next)
     try {
       localStorage.setItem(listenerChoicesKey(owner), JSON.stringify(next))
       setStorageError(false)
     } catch { setStorageError(true) }
+  }
+
+  // Signed-in listeners keep their interest radar on their account (profiles.interest_levels and interests_text);
+  // the browser copy covers the demo and a backend that is offline.
+  function saveChoices(next: ListenerChoices) {
+    const interestsChanged = next.levels !== choices.levels || next.otherInterests !== choices.otherInterests
+    storeChoices(next)
+    if (!interestsChanged || !accessToken) return
+    interestsEdited.current = true
+    window.clearTimeout(pendingSync.current)
+    pendingSync.current = window.setTimeout(() => { pendingSync.current = undefined; void syncInterests() }, 700)
+  }
+
+  async function syncInterests() {
+    const { levels, otherInterests } = choicesNow.current
+    try {
+      const token = await accessToken?.()
+      if (!token) throw new Error('expired')
+      const response = await fetch('/api/profile/interests', {
+        method: 'PUT', keepalive: true, signal: AbortSignal.timeout(10_000),
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ levels, other: otherInterests }),
+      })
+      if (!response.ok) throw new Error(response.status === 401 ? 'expired' : 'failed')
+      feedStale.current = true
+      setSyncNotice('')
+    } catch (error) {
+      setSyncNotice(error instanceof Error && error.message === 'expired'
+        ? 'Sign in again to save your interests to your account. This browser keeps them meanwhile.'
+        : 'Your interests are saved in this browser. They couldn’t be saved to your account.')
+    }
+  }
+
+  // The account's saved radar replaces this browser's copy, unless the listener already started editing.
+  useEffect(() => {
+    if (!accessToken) return
+    const controller = new AbortController()
+    accessToken()
+      .then(token => token ? fetch('/api/profile/interests', { headers: { Authorization: `Bearer ${token}` },
+        signal: AbortSignal.any([controller.signal, AbortSignal.timeout(10_000)]) }) : null)
+      .then(response => response?.ok ? response.json() : null)
+      .then(saved => {
+        if (!saved || controller.signal.aborted || interestsEdited.current) return
+        const fromAccount = interestsFromProfile(saved.levels, saved.interests_text)
+        if (Object.keys(fromAccount.levels).length || fromAccount.otherInterests) storeChoices({ ...choicesNow.current, ...fromAccount })
+      })
+      .catch(() => {})
+    return () => {
+      controller.abort()
+      if (pendingSync.current !== undefined) { window.clearTimeout(pendingSync.current); void syncInterests() }
+    }
+  }, [accessToken])
+
+  // Save any interest edit still waiting for its debounce before the session ends.
+  async function signOut() {
+    if (pendingSync.current !== undefined) {
+      window.clearTimeout(pendingSync.current)
+      pendingSync.current = undefined
+      await syncInterests()
+    }
+    onSignOut?.()
+  }
+
+  // New interests rank a new feed: reload it when the listener comes back to it, keeping their picks.
+  async function refreshFeed() {
+    try {
+      const signal = AbortSignal.timeout(90_000)
+      const recommendations = await requestJson<{ article_ids: string[] }>('/api/recommend', signal, { user_id: userId })
+      const headlines = await lookupHeadlines(recommendations.article_ids, signal)
+      feed.current = headlines
+      if (searchNow.current) return
+      const ids = new Set(headlines.map(story => story.id))
+      setStories(current => [...current.filter(story => selectedNow.current.includes(story.id) && !ids.has(story.id)), ...headlines])
+    } catch { /* Keep the current feed. */ }
+  }
+
+  function openView(id: typeof view) {
+    setView(id)
+    window.scrollTo(0, 0)
+    if (id === 'feed' && userId && feedStale.current) {
+      feedStale.current = false
+      void refreshFeed()
+    }
   }
 
   return <div className="workspace">
@@ -268,13 +367,14 @@ export function NewsWorkspace({ owner, onboarding, listenerId: userId }: { owner
       </button>
       </div>
       <nav aria-label="Workspace" className="workspace-nav">
-        {(['feed', 'briefings', 'profile'] as const).map(id => <button type="button" key={id} aria-current={view === id ? 'page' : undefined} onClick={() => { setView(id); window.scrollTo(0, 0) }}>
+        {(['feed', 'briefings', 'profile'] as const).map(id => <button type="button" key={id} aria-current={view === id ? 'page' : undefined} onClick={() => openView(id)}>
           <Icon name={id === 'feed' ? 'feed' : id === 'profile' ? 'profile' : 'discussion'} />{id === 'feed' ? 'News feed' : id === 'profile' ? 'Profile' : 'Briefings'}
         </button>)}
       </nav>
     </div>
     <section id="workspace-content" tabIndex={-1} aria-label="News workspace" className="page-width">
-      {view === 'profile' ? <Profile choices={choices} storageError={storageError} onChange={saveChoices} briefingOpen={!!launch} />
+      {view === 'profile' ? <Profile choices={choices} storageError={storageError} syncNotice={syncNotice} onChange={saveChoices}
+        email={email} onSignOut={onSignOut && (() => void signOut())} briefingOpen={!!launch} />
         : view === 'briefings' ? <Briefings key={historyVersion} owner={owner} /> : <>
         {search && <div role="status" className="search-result"><strong>{search.query}</strong>
           <p>{search.status === 'loading' ? 'Searching the articles…' : search.message}</p>
@@ -293,10 +393,13 @@ export function NewsWorkspace({ owner, onboarding, listenerId: userId }: { owner
               <button type="button" className="story-select" aria-label={`Select article: ${story.title}`} aria-pressed={picked} onClick={() => toggleStory(story)}>
                 <Icon name={picked ? 'check' : 'plus'} />
               </button>
-              <div className="story-content">
+              <div className="story-media" aria-hidden="true">
+                <span>{story.topic}</span>
                 {typeof story.thumb_url === 'string' && /^https?:\/\//i.test(story.thumb_url) &&
-                  <img className="story-photo" src={story.thumb_url} alt="" draggable={false} loading="lazy"
+                  <img src={story.thumb_url} alt="" draggable={false} loading="lazy" decoding="async"
                     referrerPolicy="no-referrer" onError={event => { event.currentTarget.hidden = true }} />}
+              </div>
+              <div className="story-content">
                 <p className="topic">{story.topic}</p><h3>{story.title}</h3><p className="story-summary">{story.summary}</p>
               </div>
             </article></li>

@@ -1,11 +1,13 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import type { FormEvent } from 'react'
 import { createRoot } from 'react-dom/client'
 import { NewsWorkspace } from './NewsWorkspace'
 import { sampleArticle } from './briefings'
 import { AudioRibbon, Brand } from './Brand'
 import { VoiceAuditions } from './VoiceAuditions'
-import { InterestFields } from './InterestFields'
+import { InterestFields, readLevels } from './InterestFields'
+import { expiring, loadSession, refreshSession, revokeSession, saveSession, sessionFrom } from './session'
+import type { Session } from './session'
 import './styles.css'
 
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL?.trim().replace(/\/+$/, '')
@@ -92,7 +94,10 @@ function TermsAgreement() {
 }
 
 function App() {
-  const [account, setAccount] = useState<{ owner: string; onboarding: unknown; listenerId?: string }>()
+  const [session, setSession] = useState<Session | null>(null)
+  const [restoring, setRestoring] = useState(() => configured && !!loadSession())
+  const sessionNow = useRef<Session | null>(null)
+  const refreshing = useRef<Promise<Session | 'rejected' | 'offline'> | null>(null)
   const [pending, setPending] = useState(false)
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
@@ -109,6 +114,50 @@ function App() {
   }, [creatingAccount, step])
 
   const action = creatingAccount ? 'Create account' : 'Sign in'
+
+  function enter(next: Session) {
+    sessionNow.current = next
+    saveSession(next)
+    setSession(next)
+  }
+
+  // A session saved in this browser signs the listener back in after a reload; an expired one is renewed first.
+  useEffect(() => {
+    const stored = loadSession()
+    if (!stored || !configured) return
+    void (async () => {
+      const renewed = expiring(stored) ? await refreshSession(stored) : stored
+      if (renewed === 'rejected') saveSession(null)
+      else enter(renewed === 'offline' ? stored : renewed)
+      setRestoring(false)
+    })()
+  }, [])
+
+  // A current access token for backend calls, renewed when it is about to expire. Undefined once signed out.
+  const accessToken = useCallback(async () => {
+    const current = sessionNow.current
+    if (!current) return undefined
+    if (!expiring(current)) return current.accessToken
+    refreshing.current ??= refreshSession(current).finally(() => { refreshing.current = null })
+    const renewed = await refreshing.current
+    if (typeof renewed === 'string' || sessionNow.current !== current) return sessionNow.current?.accessToken
+    enter(renewed)
+    return renewed.accessToken
+  }, [])
+
+  function signOut() {
+    const current = sessionNow.current
+    sessionNow.current = null
+    saveSession(null)
+    setSession(null)
+    setCreatingAccount(false)
+    setStep(0)
+    setPreferredPersonaIds([])
+    setError('')
+    setSignInEmail(current?.user.email ?? '')
+    setNotice('You’re signed out.')
+    if (current) void revokeSession(current)
+  }
 
   function switchMode() {
     setCreatingAccount(!creatingAccount)
@@ -132,7 +181,8 @@ function App() {
     const text = (name: string) => String(form.get(name) ?? '').trim()
     const primaryLanguage = text('preferred_language')
     const secondaryLanguage = text('secondary_language')
-    const interests = form.getAll('interests')
+    const interests = form.getAll('interests') // picked radar topics, strongest first
+    const interestLevels = readLevels(JSON.parse(text('interest_levels') || '{}'))
     const otherInterests = text('other_interests')
     if (otherInterests) interests.push(otherInterests)
 
@@ -163,7 +213,7 @@ function App() {
         return
       }
       if (!interests.length) {
-        setError('Select an interest or enter your own.')
+        setError('Set at least one topic on the radar or enter your own interest.')
         return
       }
       setStep(2)
@@ -200,6 +250,7 @@ function App() {
         // The existing signup trigger requires a goal; use the selected topics.
         listener_goal: interests.join(', '),
         interests_text: interests.join(', '),
+        interest_levels: interestLevels,
         preferred_persona_ids: preferredPersonaIds,
         accepted_terms: true,
         terms_url: termsUrl,
@@ -240,29 +291,28 @@ function App() {
         return
       }
 
-      const session = await response.json()
-      if (creatingAccount && !session?.access_token) {
+      const body = await response.json()
+      if (creatingAccount && !body?.access_token) {
         setSignInEmail(email)
         setCreatingAccount(false)
         setStep(0)
         setNotice('If you just registered, check your inbox for a confirmation link before signing in.')
         return
       }
-      if (typeof session?.access_token !== 'string' || !session.access_token) {
+      const next = sessionFrom(body)
+      if (!next) {
         setError('Sign-in failed. Try again.')
         return
       }
+      if (data && !next.user.user_metadata?.tio_onboarding) next.user = { ...next.user, user_metadata: { ...next.user.user_metadata, ...data } }
       // Build the listener's interest embedding now, so the first recommendations don't wait for it.
       // The feed still works without it: the recommender embeds a missing profile on demand.
       await fetch('/api/profile/embed', {
         method: 'POST',
-        headers: { Authorization: `Bearer ${session.access_token}` },
+        headers: { Authorization: `Bearer ${next.accessToken}` },
         signal: AbortSignal.timeout(15000),
       }).catch(() => null)
-      setAccount({ owner: 'account-' + (session.user?.id || email.toLowerCase()),
-        onboarding: session.user?.user_metadata?.tio_onboarding ?? data?.tio_onboarding,
-        // The recommender and briefing endpoints only serve local development for now.
-        listenerId: demoAvailable ? session.user?.id : undefined })
+      enter(next)
     } catch {
       setError('Could not reach Supabase. Try again.')
     } finally {
@@ -270,7 +320,14 @@ function App() {
     }
   }
 
-  if (account) return <main><NewsWorkspace {...account} /></main>
+  if (session) return <main><NewsWorkspace key={session.user.id} owner={'account-' + session.user.id}
+    onboarding={session.user.user_metadata?.tio_onboarding} email={session.user.email}
+    // The recommender and briefing endpoints only serve local development for now.
+    listenerId={demoAvailable ? session.user.id : undefined} accessToken={accessToken} onSignOut={signOut} /></main>
+  if (restoring) return <main className="auth-page">
+    <header className="masthead" aria-hidden="true"><AudioRibbon /></header>
+    <p role="status" className="auth-layout muted">Signing you in…</p>
+  </main>
 
   return (
     <main className="auth-page">

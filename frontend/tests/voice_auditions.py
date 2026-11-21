@@ -19,7 +19,7 @@ def open_voices(page):
     page.get_by_role('button', name='Continue', exact=True).click()
     expect(page.get_by_label('What do you want from your briefing?', exact=True)).to_have_count(0)
     expect(page.get_by_label('Preferred listening time', exact=True)).to_have_count(0)
-    page.get_by_label('Technology', exact=True).check()
+    page.get_by_role('slider', name='Technology', exact=True).press('End')
     page.get_by_role('button', name='Continue', exact=True).click()
     expect(page.get_by_role('heading', name='Pick up to three favorite voices')).to_be_visible()
     expect(page.locator('#login-title .brand')).to_have_css('font-size', '43px')
@@ -112,6 +112,7 @@ with sync_playwright() as p:
         expect(page.get_by_role('status')).to_contain_text('check your inbox')
         assert signups[0]['data']['tio_onboarding']['preferred_persona_ids'] == [ADA, GRACE]
         assert signups[0]['data']['tio_onboarding']['listener_goal'] == 'Technology'
+        assert signups[0]['data']['tio_onboarding']['interest_levels'] == {'Technology': 3}
         assert 'preferred_listen_time' not in signups[0]['data']['tio_onboarding']
         assert any(ADA in url for url in previews) and any(GRACE in url for url in previews) and not errors, (previews, errors)
         print(f'{width}px {theme}: streamlined picker, playback, favorites, back navigation and signup metadata passed', flush=True)
@@ -130,6 +131,9 @@ with sync_playwright() as p:
     page.route('**/api/voice/catalog', lambda route: route.fulfill(json=VOICES))
     page.route('**/api/voice/catalog/*/preview', lambda route: route.fulfill(json={'url': '/voices/rates-open.wav'}))
     page.route('**/api/profile/embed', lambda route: route.fulfill(status=204))
+    # No saved account radar: each test account starts from its sign-up metadata, then this browser's copy.
+    page.route('**/api/profile/interests', lambda route: route.fulfill(status=404, json={'detail': 'No profile'})
+               if route.request.method == 'GET' else route.fulfill(json={'levels': {}, 'interests_text': None}))
     page.route('**/api/recommend', lambda route: route.fulfill(json={'article_ids': ['story']}))
     page.route('**/api/recommend/lookup', lambda route: route.fulfill(json={
         'story': {'headline': 'A briefing topic', 'publication': 'Sample Markets', 'language': 'en'},
@@ -145,9 +149,16 @@ with sync_playwright() as p:
         }}})
 
     page.route('**/auth/v1/token?grant_type=password', sign_in)
+    page.route('**/auth/v1/logout', lambda route: route.fulfill(status=204))
 
     def open_profile(email):
         page.goto('http://localhost:5173/')
+        # A saved session signs straight back in after a reload: sign out to switch accounts.
+        page.wait_for_selector('#login-title, .workspace-nav')
+        if page.locator('.workspace-nav').count():
+            page.get_by_role('button', name='Profile', exact=True).click()
+            page.get_by_role('button', name='Sign out', exact=True).click()
+            expect(page.get_by_role('status')).to_contain_text('signed out')
         page.get_by_label('Email', exact=True).fill(email)
         page.get_by_label('Password', exact=True).fill('Example-password-123!')
         page.get_by_role('button', name='Sign in', exact=True).click()
@@ -156,18 +167,21 @@ with sync_playwright() as p:
 
     first_email = 'profile-one@example.invalid'
     open_profile(first_email)
+    page.reload()  # the session survives a reload
+    page.get_by_role('button', name='Profile', exact=True).click()
+    expect(page.get_by_role('heading', name='Profile', exact=True)).to_be_visible()
     expect(page.locator('.workspace .masthead')).to_have_count(0)
     expect(page.get_by_text('On this device', exact=True)).to_have_count(0)
     expect(page.get_by_label('Listener profile')).to_have_count(0)
     expect(page.get_by_label('Playback')).to_have_count(0)
     appearance = page.get_by_role('region', name='Appearance')
     assert appearance.bounding_box()['y'] < page.locator('.interest-options').bounding_box()['y']
-    expect(page.get_by_label('Technology', exact=True)).to_be_checked()
+    expect(page.get_by_role('slider', name='Technology', exact=True)).to_have_attribute('aria-valuenow', '2')
     expect(page.get_by_label('Other interests (optional)')).to_have_value('Urban planning')
     saved = page.locator('.saved-voices')
     expect(saved.get_by_text('Ada', exact=True)).to_be_visible()
-    page.get_by_label('Technology', exact=True).uncheck()
-    page.get_by_label('Company earnings', exact=True).check()
+    page.get_by_role('slider', name='Technology', exact=True).press('Home')
+    page.get_by_role('slider', name='Company earnings', exact=True).press('End')
     page.get_by_label('Other interests (optional)').fill('City budgets')
     saved.get_by_role('button', name='Remove Ada from saved voices').click()
     page.get_by_role('button', name='Briefings', exact=True).click()
@@ -176,8 +190,8 @@ with sync_playwright() as p:
     page.get_by_role('button', name='News feed', exact=True).click()
     expect(page.locator('.workspace .masthead')).to_be_visible()
     open_profile(first_email)
-    expect(page.get_by_label('Technology', exact=True)).not_to_be_checked()
-    expect(page.get_by_label('Company earnings', exact=True)).to_be_checked()
+    expect(page.get_by_role('slider', name='Technology', exact=True)).to_have_attribute('aria-valuenow', '0')
+    expect(page.get_by_role('slider', name='Company earnings', exact=True)).to_have_attribute('aria-valuenow', '3')
     expect(page.get_by_label('Other interests (optional)')).to_have_value('City budgets')
     expect(saved.get_by_text('Ada', exact=True)).to_have_count(0)
     page.get_by_role('button', name='News feed', exact=True).click()
@@ -188,12 +202,12 @@ with sync_playwright() as p:
         page.get_by_role('button', name='Begin briefing').click()
     assert 'Company earnings, City budgets' in start.value.post_data_json['profile']
     open_profile('profile-two@example.invalid')
-    expect(page.get_by_label('Technology', exact=True)).to_be_checked()
-    expect(page.get_by_label('Company earnings', exact=True)).not_to_be_checked()
+    expect(page.get_by_role('slider', name='Technology', exact=True)).to_have_attribute('aria-valuenow', '2')
+    expect(page.get_by_role('slider', name='Company earnings', exact=True)).to_have_attribute('aria-valuenow', '0')
     expect(saved.get_by_text('Ada', exact=True)).to_be_visible()
     page.goto('http://localhost:5173/demo')
     page.get_by_role('button', name='Profile', exact=True).click()
-    expect(page.get_by_label('Technology', exact=True)).not_to_be_checked()
+    expect(page.get_by_role('slider', name='Technology', exact=True)).to_have_attribute('aria-valuenow', '0')
     expect(saved.get_by_text('Ada', exact=True)).to_have_count(0)
     print('Profile: layout, signup defaults, autosave, and account/demo isolation passed')
     browser.close()

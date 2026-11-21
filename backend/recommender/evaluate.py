@@ -1,7 +1,7 @@
 """Offline check of the recommender on the seeded listeners.
 
 For each user with interactions: hide their latest HOLDOUT share of positive interactions (played, completed,
-liked, shared, source_opened), rebuild their vector from their profile text and the remaining history only, rank
+liked, shared, source_opened), rebuild their vector from their profile text, interest radar and the remaining history only, rank
 every candidate article, and count how many hidden articles land in the top k. Compares the full personal score
 with similarity alone, so the presentation can show what coverage, topic preferences and hosts add.
 
@@ -10,7 +10,7 @@ with similarity alone, so the presentation can show what coverage, topic prefere
 
 from recommender import recommend as rec
 from recommender.db import connect
-from recommender.embeddings import embed_many, embed_query, from_pgvector, normalize
+from recommender.embeddings import embed_many, from_pgvector, normalize
 
 HOLDOUT = 0.3
 KS = (10, 20, 50)
@@ -37,10 +37,10 @@ def _listener(conn, user_id: str, train: list[str]) -> rec.Listener:
         """
         select interests_text, listener_goal, occupation, country, risk_appetite, preferred_language::text,
                secondary_languages::text[], briefing_length_minutes, null, null, null, null, '{}'::text[],
-               default_persona_id::text, false, chosen_persona_ids::text[]
+               default_persona_id::text, false, chosen_persona_ids::text[], coalesce(interest_levels, '{}'::jsonb)
         from public.profiles where id = %s
         """, (user_id,)).fetchone()))
-    vector = normalize(embed_query(rec.profile_text(profile)))
+    vector = rec.onboarding_vector(profile)
     history = conn.execute("select avg(summary_embedding)::text from public.articles where id = any(%s)",
                            (train,)).fetchone()[0]
     if history:
