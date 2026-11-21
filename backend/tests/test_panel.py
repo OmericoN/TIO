@@ -503,7 +503,7 @@ class RealtimePanelTest(unittest.IsolatedAsyncioTestCase):
         api.sessions[key] = item
         self.addCleanup(api.sessions.pop, key, None)
         briefs = iter(realtime.TurnBrief(goal=f"Goal {i}", points=[f"Point {i}"], card_ids=[], handoff=None,
-                                         action="respond", max_seconds=12) for i in range(10))
+                                         action="respond", max_seconds=12, chart=None) for i in range(10))
         with patch.object(realtime, "make_brief", side_effect=lambda panel: next(briefs)) as plan:
             first = await api.realtime_next(key, api.RealtimeStep(generation=0))
             self.assertIn("Goal 0", first["brief"])
@@ -559,7 +559,7 @@ class RealtimeRoleTest(unittest.TestCase):
         self.assertIn(f"{host_name} is the host", instructions)
         panel.heard(line("Welcome. What stands out?", handoff=panel.personas[guest].name), [], 5)
         brief = realtime.TurnBrief(goal="Answer", points=["Growth"], card_ids=[], handoff=None, action="respond",
-                                   max_seconds=12)
+                                   max_seconds=12, chart=None)
         self.assertIn("You are a GUEST, not the host", realtime.render_brief(panel, brief))
 
 
@@ -580,7 +580,7 @@ class SkipRequestTest(unittest.IsolatedAsyncioTestCase):
         api.sessions[key] = item
         self.addCleanup(api.sessions.pop, key, None)
         briefs = iter(realtime.TurnBrief(goal=f"Goal {i}", points=["p"], card_ids=[], handoff=None, action="respond",
-                                         max_seconds=12) for i in range(10))
+                                         max_seconds=12, chart=None) for i in range(10))
         with patch.object(realtime, "make_brief", side_effect=lambda panel: next(briefs)) as plan:
             first = await api.realtime_next(key, api.RealtimeStep(generation=0))
             await item.brief_prefetch.task
@@ -595,3 +595,25 @@ class SkipRequestTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(resumed["story"], item.panel.stories[1].headline)
             self.assertEqual(plan.call_count, calls)                     # no wait: the opening was ready
             await item.brief_prefetch.task
+
+
+class FactChartTest(unittest.TestCase):
+    cards = [{"id": "1.1", "point": "Net sales rose to $6.2 million from $5.8 million", "status": "reported",
+              "sources": [{"publisher": "Zacks", "quote": "Net sales increased 6.5% to $6.2 million from $5.8 million."}]}]
+
+    def chart(self, *values):
+        from discussion import realtime
+        return realtime.ChartSpec(kind="change", title="Net sales", unit="$M", points=[
+            realtime.ChartPoint(label=f"P{i}", value=v, card_id=card) for i, (v, card) in enumerate(values)])
+
+    def test_only_charts_whose_figures_are_on_their_cards_are_shown(self):
+        from discussion import realtime
+        good = self.chart((5.8, "1.1"), (6.2, "1.1"))
+        self.assertIs(realtime.checked_chart(good, self.cards), good)
+        self.assertEqual(realtime.chart_payload(good, self.cards)["sources"], ["Zacks"])
+        with self.assertLogs("discussion.realtime", level="WARNING"):
+            self.assertIsNone(realtime.checked_chart(self.chart((5.8, "1.1"), (7.1, "1.1")), self.cards))  # invented
+        with self.assertLogs("discussion.realtime", level="WARNING"):
+            self.assertIsNone(realtime.checked_chart(self.chart((5.8, "1.1"), (6.2, "9.9")), self.cards))  # no card
+        with self.assertLogs("discussion.realtime", level="WARNING"):
+            self.assertIsNone(realtime.checked_chart(self.chart((6.2, "1.1")), self.cards))                # one bar

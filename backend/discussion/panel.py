@@ -366,6 +366,7 @@ class Panel:
     speaker_turns: dict[UUID, int] = field(default_factory=dict)  # whole briefing, for intros and catchphrases
     openings: dict[UUID, list[str]] = field(default_factory=dict)  # each speaker's recent first sentences
     listener_style: list[str] = field(default_factory=list)  # lasting preferences the listener has shown
+    charted: set[str] = field(default_factory=set)  # stories that already showed a chart (realtime panel)
 
     def signature_lines(self, speaker):
         """Which persona lines this turn may draw on, and how. Nobody introduces themselves. The catchphrases are
@@ -604,7 +605,8 @@ Said just before the interruption:
         """An independent copy for speculative work: everything heard() mutates is copied; sources stay shared."""
         return replace(self, history=list(self.history), guest_turns=set(self.guest_turns),
                        speaker_turns=dict(self.speaker_turns), openings={k: list(v) for k, v in self.openings.items()},
-                       last_sources=list(self.last_sources), listener_style=list(self.listener_style))
+                       last_sources=list(self.last_sources), listener_style=list(self.listener_style),
+                       charted=set(self.charted))
 
     def state(self):
         """What the next turn depends on, to tell whether a speculatively drafted turn is still the right one."""

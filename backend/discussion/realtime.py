@@ -14,7 +14,11 @@ from urllib.request import Request, urlopen
 
 from pydantic import Field
 
-from discussion.panel import TURN_GUIDE, Turn, model
+import logging
+
+from discussion.panel import TURN_GUIDE, Turn, figures_supported, model
+
+log = logging.getLogger(__name__)
 from research.matcher import REPO_ROOT, StructuredOutput
 
 REALTIME_MODEL = os.getenv("PANEL_REALTIME_MODEL", "gpt-realtime")
@@ -38,6 +42,21 @@ HOST_VOICE = "marin"
 GUEST_VOICES = ["cedar", "coral", "ash", "sage", "verse", "ballad", "shimmer", "echo", "alloy"]
 
 
+class ChartPoint(StructuredOutput):
+    label: str = Field(description="Short label for the bar, e.g. 'Q3 2025' or 'Reuters'.")
+    value: float = Field(description="The figure exactly as on the card (rounded only as the card rounds it).")
+    card_id: str = Field(description="The fact card this figure comes from.")
+
+
+class ChartSpec(StructuredOutput):
+    kind: Literal["bars", "change", "comparison"] = Field(description="bars: a few figures side by side; change: "
+                                                                     "before and after; comparison: outlets' "
+                                                                     "differing figures for the same measure.")
+    title: str = Field(description="What the chart shows, under 60 characters.")
+    unit: str = Field(description="Unit shown after each value, e.g. '%', '$M', 'cents'. Empty if none.")
+    points: list[ChartPoint] = Field(description="Two to six points, all in the same unit.")
+
+
 class TurnBrief(StructuredOutput):
     goal: str = Field(description="What this turn must achieve, in one sentence.")
     points: list[str] = Field(description="One to three points to make, as plain notes, not a script.")
@@ -45,6 +64,7 @@ class TurnBrief(StructuredOutput):
     handoff: str | None = Field(description="Exact name of the guest to hand over to at the end, or null.")
     action: Literal["respond", "clarify", "close"]
     max_seconds: int = Field(description="How long the spoken line should run, 8 to 35 seconds.")
+    chart: ChartSpec | None = Field(description="A chart to show while this line plays, or null. Most turns: null.")
 
 
 # OpenAI's built-in realtime voices, roughly characterised, so the model can cast each persona.
@@ -260,8 +280,11 @@ def make_brief(panel):
         "roster": [panel.personas[i].name for i in panel.roster], "speaker_angle": panel.angle(speaker),
         "guests_yet_to_speak": [panel.personas[i].name for i in panel.roster
                                 if i not in panel.guest_turns and i != speaker],
-        "story_tone": panel.story_tone(), "fact_cards": [{k: c[k] for k in ("id", "point", "status")} for c in cards],
+        "story_tone": panel.story_tone(),
+        "fact_cards": [{**{k: c[k] for k in ("id", "point", "status")},
+                        "quotes": [s["quote"][:300] for s in c["sources"]]} for c in cards],
         "mode": "panel" if panel.roster else "presenter",
+        "chart_shown_for_this_story": panel.story.id in panel.charted,
     }
     instructions = TURN_GUIDE + """
 
@@ -277,13 +300,52 @@ You are the show's producer, not the speaker. Plan the next turn for `speaker` a
 improvise from: a goal, one to three points as notes (not a script) and the fact card ids they rely on. Follow
 every rule above for what the turn should do. Only plan facts that are on the fact cards. Put the exact guest
 name in handoff when the speaker should hand over. Pick max_seconds to fit the point: 8 to 15 for a reaction,
-up to 35 for a fuller point."""
+up to 35 for a fuller point.
+
+## Charts (about one per story)
+
+Give each story with figures one chart, on the turn where the numbers are most central: usually the first expert
+answer that walks through them. Good charts: a before and after (revenue $5.8M → $6.2M), two to six related
+figures in the same unit (comparable sales +5.6%, transactions +5%, average ticket +0.6%), or outlets reporting
+different numbers for the same measure. Every value must be a figure written on its card, in one shared unit,
+each with its card_id. Never compute, convert or estimate values, and never mix units in one chart. If
+chart_shown_for_this_story is true, or the turn is an opening, a closing or pure conversation, chart is null."""
     target, direction = show_step(panel)
     data["this_turn"] = direction
     brief = model().generate("realtime_brief", instructions, data, TurnBrief)
     known = {c["id"] for c in cards}
     return brief.model_copy(update={"card_ids": [i for i in brief.card_ids if i in known], "handoff": target,
-                                    "max_seconds": max(8, min(35, brief.max_seconds))})
+                                    "max_seconds": max(8, min(35, brief.max_seconds)),
+                                    "chart": checked_chart(brief.chart, cards)})
+
+
+def checked_chart(chart, cards):
+    """The chart if every value is a figure written on the card it names (honest rounding allowed), else None.
+    This keeps the sourcing rule: nothing appears on screen that the reporting doesn't say."""
+    if chart is None:
+        return None
+    by_id = {c["id"]: c for c in cards}
+    problem = None
+    if not 2 <= len(chart.points) <= 6:
+        problem = f"{len(chart.points)} points"
+    for point in chart.points:
+        card = by_id.get(point.card_id)
+        evidence = " ".join([card["point"], *(s["quote"] for s in card["sources"])]) if card else ""
+        if problem is None and not (card and figures_supported(f"{point.value:g}", evidence)):
+            problem = f"{point.value:g} not on card {point.card_id}"
+    if problem:
+        log.warning("Chart dropped (%s): %s", problem, chart.title)
+        return None
+    return chart
+
+
+def chart_payload(chart, cards):
+    """The chart for the player, with the outlets its figures come from."""
+    if chart is None:
+        return None
+    by_id = {c["id"]: c for c in cards}
+    outlets = list(dict.fromkeys(s["publisher"] for p in chart.points for s in by_id[p.card_id]["sources"]))
+    return {**chart.model_dump(), "sources": outlets}
 
 
 def render_brief(panel, brief):

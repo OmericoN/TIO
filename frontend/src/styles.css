@@ -600,3 +600,15 @@ a { text-underline-offset: .2em; }
 .saved-voice > span:not(.saved-voice-orb) { overflow-wrap: anywhere; }
 .saved-voice-orb { flex: none; display: block; width: 44px; height: 44px; }
 .saved-voice-remove { margin-left: auto; font-size: 22px; color: var(--muted); }
+
+/* Fact chart shown during the realtime panel: figures from the story's fact cards. */
+.fact-chart { margin: 0 0 12px; padding: 14px 16px; border: 1px solid var(--line); border-radius: 14px; background: var(--surface); }
+.fact-chart figcaption { font-weight: 600; font-size: 14px; margin-bottom: 8px; color: var(--ink); }
+.fact-chart svg { display: block; width: 100%; height: auto; overflow: visible; }
+.fact-chart .chart-label { font-size: 12px; fill: var(--muted); }
+.fact-chart .chart-value { font-size: 12px; font-weight: 600; fill: var(--ink); font-variant-numeric: tabular-nums; }
+.fact-chart .chart-bar { fill: var(--olive); transform-box: fill-box; transform-origin: left; animation: chart-grow .5s ease-out both; }
+.fact-chart .negative .chart-bar { fill: var(--muted); }
+.fact-chart .chart-source { margin: 6px 0 0; font-size: 12px; color: var(--muted); }
+@keyframes chart-grow { from { transform: scaleX(0); } to { transform: scaleX(1); } }
+@media (prefers-reduced-motion: reduce) { .fact-chart .chart-bar { animation: none; } }

@@ -582,13 +582,16 @@ def plan_turn(panel):
                           "host": panel.personas[panel.host].name, "guests": [panel.personas[i].name for i in panel.roster],
                           "story": panel.story.headline, "story_id": panel.story.id,
                           "brief": realtime.render_brief(panel, brief),
-                          "max_seconds": brief.max_seconds, "sources": sources}
+                          "max_seconds": brief.max_seconds, "sources": sources,
+                          "chart": realtime.chart_payload(brief.chart, list(cards.values()))}
 
 
 def start_brief_prefetch(item):
     """Plan the brief after the one being spoken, assuming its points get made, while the agent is still talking."""
     token, brief, _, cards = item.brief_pending
     panel = item.panel.fork()
+    if brief.chart:
+        panel.charted.add(panel.story.id)
     panel.heard(realtime.brief_turn(brief), cards, brief.max_seconds * 0.8, True)
     if panel.index == len(panel.stories):
         return
@@ -644,6 +647,8 @@ async def realtime_next(key: UUID, step: RealtimeStep):
         if token != step.heard:
             raise HTTPException(409, "Acknowledge the active segment first.")
         said = spoken_text(step.text)
+        if brief.chart:
+            item.panel.charted.add(item.panel.story.id)
         item.panel.heard(realtime.brief_turn(brief, said or None), cards, step.seconds or brief.max_seconds,
                          not step.interrupted)
         item.brief_pending = None
