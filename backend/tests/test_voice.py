@@ -1,13 +1,20 @@
+import base64
 import io
 import json
 import unittest
-from unittest.mock import patch
+import wave
+from pathlib import Path
+from tempfile import TemporaryDirectory
+from unittest.mock import Mock, patch
 from urllib.error import URLError
+from uuid import UUID
 
 from fastapi import HTTPException, Request, Response
 
-from api.voice import PREVIEW_PROMPT, create_voice_session
+from api.voice import PREVIEW_PROMPT, create_voice_session, voice_catalog
+from discussion.personas import AgentPersona
 from main import app
+from voice.generate_previews import SAMPLE, SAMPLE_RATE, render_audio, save_wav
 
 
 class VoiceSessionTest(unittest.TestCase):
@@ -64,3 +71,50 @@ class VoiceSessionTest(unittest.TestCase):
                 create_voice_session(self.request(), Response())
             self.assertEqual(failure.exception.status_code, 502)
             self.assertEqual(failure.exception.detail, "ElevenLabs could not start a voice session.")
+
+
+class StoredPreviewTest(unittest.TestCase):
+    @patch.dict("os.environ", {"ELEVENLABS_API_KEY": "", "OPENAI_API_KEY": ""})
+    @patch("api.voice.connect")
+    def test_catalog_only_offers_existing_clips(self, connect):
+        persona_id = UUID("11111111-1111-4111-8111-111111111111")
+        connect.return_value.__enter__.return_value.execute.return_value.fetchall.return_value = [
+            (persona_id, "Ada", "Markets", "market-voice"),
+            (persona_id, "Grace", "Rates", "missing"),
+            (persona_id, "Sam", "World", "../outside"),
+        ]
+        with TemporaryDirectory() as directory, patch("voice.previews.PREVIEW_DIR", Path(directory)):
+            (Path(directory) / "market-voice.wav").touch()
+            entries = voice_catalog()
+        self.assertEqual(entries[0], {"id": persona_id, "name": "Ada", "tagline": "Markets",
+                                      "preview_url": "/api/voice/previews/market-voice.wav"})
+        self.assertEqual([row["preview_url"] for row in entries[1:]], [None, None])
+
+    def test_render_writes_a_wav_only_for_the_expected_complete_sample(self):
+        persona = AgentPersona(id=UUID(int=1), name="Ada", slug="ada", personality_md="Analyst.", accent="Irish")
+        pcm = b"\x01\x00" * SAMPLE_RATE
+        events = [
+            {"type": "session.updated"},
+            {"type": "response.output_audio.delta", "delta": base64.b64encode(pcm).decode()},
+            {"type": "response.output_audio_transcript.done", "transcript": SAMPLE},
+            {"type": "response.done", "response": {"status": "completed"}},
+        ]
+        socket = Mock()
+        socket.recv.side_effect = map(json.dumps, events)
+
+        audio = render_audio(socket, persona, "sage", "Measured and warm.")
+
+        session, response = (json.loads(call.args[0]) for call in socket.send.call_args_list)
+        self.assertEqual(session["session"]["audio"]["output"]["voice"], "sage")
+        self.assertIn("Measured and warm.\nAccent: Irish.", response["response"]["instructions"])
+        with TemporaryDirectory() as directory:
+            clip = Path(directory) / "ada.wav"
+            save_wav(clip, audio)
+            with wave.open(str(clip), "rb") as stored:
+                self.assertEqual((stored.getnchannels(), stored.getsampwidth(), stored.getframerate()), (1, 2, SAMPLE_RATE))
+                self.assertEqual(stored.readframes(SAMPLE_RATE), pcm)
+
+        events[2]["transcript"] = "Different text."
+        socket.recv.side_effect = map(json.dumps, events)
+        with self.assertRaisesRegex(ValueError, "Unexpected sample transcript"):
+            render_audio(socket, persona, "sage", "Measured and warm.")
