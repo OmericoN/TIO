@@ -6,3 +6,4 @@ import tempfile
 os.environ["ELEVENLABS_API_KEY"] = ""
 # Keep holding lines voiced by mocked tests out of the real cache.
 os.environ["PANEL_HOLDING_CACHE"] = tempfile.mkdtemp(prefix="tio-holding-")
+os.environ["PANEL_VOICE_PROFILES"] = os.path.join(tempfile.mkdtemp(prefix="tio-voices-"), "profiles.json")

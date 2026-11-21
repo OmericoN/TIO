@@ -553,15 +553,15 @@ async def realtime_agents(key: UUID):
     if not os.getenv("OPENAI_API_KEY", "").strip():
         raise HTTPException(503, "The realtime panel needs OPENAI_API_KEY.")
     panel = item.panel
-    chosen = realtime.voices(panel)
     try:
-        secrets = await asyncio.gather(*(run_in_threadpool(realtime.create_agent_secret, panel, i, v)
-                                         for i, v in chosen.items()))
-    except (URLError, TimeoutError, ValueError, OSError, KeyError):
+        chosen = await run_in_threadpool(realtime.voices, panel)  # cast once per persona, then cached
+        secrets = await asyncio.gather(*(run_in_threadpool(realtime.create_agent_secret, panel, i, v, direction)
+                                         for i, (v, direction) in chosen.items()))
+    except (URLError, TimeoutError, ValueError, OSError, KeyError, MatchProcessingError):
         raise HTTPException(502, "OpenAI could not start the realtime agents.") from None
     return {"model": realtime.REALTIME_MODEL, "agents": [
         {"id": str(i), "name": panel.personas[i].name, "role": "host" if i == panel.host else "guest",
-         "voice": v, "secret": secret} for (i, v), secret in zip(chosen.items(), secrets)]}
+         "voice": v, "secret": secret} for (i, (v, _)), secret in zip(chosen.items(), secrets)]}
 
 
 def plan_turn(panel):

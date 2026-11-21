@@ -478,10 +478,13 @@ class RealtimePanelTest(unittest.IsolatedAsyncioTestCase):
     def test_every_speaker_gets_a_distinct_voice(self):
         from discussion import realtime
         panel = fixture()
-        chosen = realtime.voices(panel)
-        self.assertEqual(chosen[panel.host], realtime.HOST_VOICE)
-        self.assertEqual(len(set(chosen.values())), len(chosen))
-        self.assertIn("TURN BRIEF", realtime.agent_instructions(panel, panel.host))
+        cast = lambda persona: realtime.VoiceProfile(voices=["marin", "cedar", "coral"], direction=f"{persona.name} voice.")
+        chosen = realtime.voices(panel, cast)                        # everyone's first choice is marin
+        self.assertEqual(chosen[panel.host][0], "marin")
+        self.assertEqual(len({voice for voice, _ in chosen.values()}), len(chosen))
+        instructions = realtime.agent_instructions(panel, panel.host, chosen[panel.host][1])
+        self.assertIn("TURN BRIEF", instructions)
+        self.assertIn("# Your voice", instructions)
 
 
 class ShowStructureTest(unittest.TestCase):
