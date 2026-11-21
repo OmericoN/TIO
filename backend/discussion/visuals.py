@@ -82,7 +82,7 @@ pick the kind that fits:
   named on the cards, with their real coordinates. Not for space stories, and not when the place is just a
   company's home country.
 Every value, step and place must come from the fact cards.
-visual_expected says what this turn's slot is: follow it. "chart, flow or map" means pick whichever of the three
+visual_expected says what this turn's slot is: follow it. "none" means visual: null. "chart, flow or map" means pick whichever of the three
 the cards support best (numbers → chart, a sequence or cause and effect → flow, places → map); return null only
 if the cards truly support none. "optional" means show something only if it adds something new. Never repeat one
 listed in visuals_shown_this_story, and vary the kinds within a story."""
@@ -262,15 +262,21 @@ def payload(visual, cards, pictures):
     return {**shown, "picture": {"url": photo["url"], "caption": photo["headline"]}, "sources": [photo["publisher"]]}
 
 
+MAX_DIAGRAMS = 1  # charts, maps or flow charts per story (one more once the listener has asked to see things)
+
+
 def expected(panel, pictures):
     """What this turn's visual slot is, decided by code like the running order: the story's photo when the host
     opens it, a chart, flow chart or map on the first expert turn, and optional after that."""
     shown = panel.visuals_shown.get(panel.story.id, [])
+    diagrams = [v for v in shown if not v.startswith("picture")]
     if panel.speaker() == panel.host and panel.phase == "open" and not panel.question:
         return "picture" if pictures else "chart, flow or map"
-    if panel.speaker() != panel.host and not any(not v.startswith("picture") for v in shown):
+    if len(diagrams) >= MAX_DIAGRAMS + panel.wants_visuals:
+        return "none"  # enough on screen for this story; more would crowd out the conversation
+    if panel.speaker() != panel.host and not diagrams:
         return "chart, flow or map"
-    return "optional" if not panel.wants_visuals else "chart, flow or map if there's anything new to show"
+    return "optional"
 
 
 def opening_picture(panel, pictures):

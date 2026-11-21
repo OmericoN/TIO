@@ -731,3 +731,20 @@ class AccuracyTest(unittest.TestCase):
         with patch.object(realtime, "model") as provider, patch.object(realtime.visuals, "story_pictures", return_value={}):
             provider.return_value.generate.return_value = fixing
             self.assertEqual(realtime.make_brief(panel).facts, fixing.facts)
+
+
+class VisualPacingTest(unittest.TestCase):
+    def test_visuals_are_capped_per_story_and_photos_go_unmentioned(self):
+        from discussion import realtime, visuals
+        panel = fixture()
+        self.assertEqual(visuals.expected(panel, {"a": {}}), "picture")
+        panel.heard(line("Welcome.", handoff=panel.personas[panel.roster[0]].name), [], 5)
+        self.assertEqual(visuals.expected(panel, {}), "chart, flow or map")
+        panel.visuals_shown[panel.story.id] = ["picture: Photo", "chart: Growth"]
+        self.assertEqual(visuals.expected(panel, {}), "none")
+        panel.wants_visuals = True
+        self.assertEqual(visuals.expected(panel, {}), "optional")
+        photo = visuals.Visual(kind="picture", title="P", chart=None, flow=None, places=None, picture_article_id="a")
+        brief = realtime.TurnBrief(goal="g", points=["p"], facts=[], card_ids=[], handoff=None, action="respond",
+                                   max_seconds=10, visual=photo)
+        self.assertNotIn("screen", realtime.render_brief(panel, brief))

@@ -187,8 +187,9 @@ Keep this voice consistent in every turn.
 - React to what the previous speaker said, by name, when the brief says so.
 - Don't introduce yourself or say your own name.
 - You can't draw or show anything yourself. Charts, photos, maps and flow charts appear on the listener's screen
-  only when your brief says one is on screen; then refer to it naturally ("as you can see on the map"). Never
-  promise or describe a visual that isn't there.
+  by themselves and speak for themselves. Talk to the listener, not about the screen: mention a visual at most
+  once, in a few words, and only when your brief says a chart, map or flow chart just appeared. Never mention
+  photos, never describe or read out a visual, and never promise one that isn't there.
 - Facts come only from your brief's "Facts to state" and fact cards. Say each of those facts accurately, keeping
   every figure, name and date exactly as written; you may change the wording around them. Add no other facts: no
   extra numbers, dates, names, places, quotes, causes or predictions, not even general knowledge. When in doubt,
@@ -330,7 +331,7 @@ sentence with the card's figure ("Quick correction: it was 5.6%, not 14%"), then
     points = [p for p in brief.points if grounded(p, reporting, 0)]
     if len(facts) < len(brief.facts) or len(points) < len(brief.points):
         log.warning("Brief trimmed: dropped %s", [x for x in [*brief.facts, *brief.points] if x not in facts + points])
-    visual = visuals.checked_visual(brief.visual, cards, pictures)
+    visual = visuals.checked_visual(brief.visual, cards, pictures) if data["visual_expected"] != "none" else None
     if visual is None and brief.visual is not None and data["visual_expected"] == "chart, flow or map":
         # The expected visual was refused (an invented value, mixed units…): ask once more, with the reason.
         visual = visuals.for_listener(panel, f"Show a chart, flow chart or map for this point: {brief.goal}", cards)
@@ -375,8 +376,10 @@ def render_brief(panel, brief):
     role = ("You are the HOST." if speaker == panel.host
             else f"You are a GUEST, not the host: {panel.personas[panel.host].name} hosts. Don't welcome, introduce, "
                  "change the story or wrap up.")
-    on_screen = (f"\nOn the listener's screen while you speak: {visuals.describe(brief.visual, visuals.story_pictures(panel.story) if brief.visual.kind == "picture" else None)}. "
-                 f"Point them to it naturally; don't read out everything on it." if brief.visual else "")
+    # Photos appear silently; a chart, map or flow chart gets at most a passing nod.
+    on_screen = (f"\nJust appeared on the listener's screen: {visuals.describe(brief.visual)}. You may nod to it once "
+                 f"in a few words (\"it's on your screen\"); don't describe it. Your point matters more."
+                 if brief.visual and brief.visual.kind != "picture" else "")
     return f"""TURN BRIEF
 {role}{on_screen}
 Story: {panel.story.headline}{heard}

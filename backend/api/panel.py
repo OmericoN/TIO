@@ -630,8 +630,8 @@ async def realtime_listen(key: UUID, body: ListenerRequest):
             visuals.remember(item.panel, visual)
             return {"intent": "visual", "visual": visuals.payload(visual, cards, pictures),
                     "note": (f"The listener asked to see something, and {visuals.describe(visual, pictures)} is now on "
-                             f"their screen. Say so, then talk them through it in two or three sentences, naming the "
-                             f"outlet. Don't read out everything on it. From now on the panel shows more visuals.")}
+                             f"their screen. Say so in a few words, then answer what they're after in a sentence or "
+                             f"two, naming the outlet. Don't describe the visual or read it out.")}
         return {"intent": "visual", "visual": None,
                 "note": ("The listener asked to see something, but this story's reporting has nothing that can be shown "
                          "honestly. Say that plainly in a sentence, then answer what they're after from the facts.")}
