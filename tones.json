@@ -2,6 +2,7 @@
   "article_tones": {
     "somber": "Speak with restraint and compassion about death, grief, or severe human suffering.",
     "serious": "Use measured, direct language for credible threats to people or livelihoods.",
+    "cautious": "Use careful, hedged language for uncertain or mixed news, flagging risks without alarm.",
     "neutral": "Report straightforward facts in an even voice.",
     "analytical": "Explain figures, market moves, and their significance.",
     "upbeat": "Use a positive delivery for clearly good news without material harm."

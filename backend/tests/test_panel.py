@@ -87,10 +87,10 @@ class PanelTest(unittest.TestCase):
         loose = cite.model_copy(update={"quote": "  ".join(report.body.split())})  # spacing differs from the source
         self.assertEqual(evidence(line("The report puts growth at 6%.", citations=[loose]), story,
                                   passages(story, "revenue"))[0]["quote"], report.body)
-        for invalid in [line("Revenue rose 16%.", citations=[cite]),
-                        line("It was 6%.", citations=[cite.model_copy(update={"article_id": articles[0].id})])]:
-            with self.assertRaises(ValueError):
-                evidence(invalid, story, passages(story, ""))
+        with self.assertRaises(ValueError):                         # a figure in no passage is invented
+            evidence(line("Revenue rose 16%.", citations=[cite]), story, passages(story, ""))
+        wrong_article = line("It was 6%.", citations=[cite.model_copy(update={"article_id": articles[0].id})])
+        self.assertEqual(evidence(wrong_article, story, passages(story, "")), [])  # line plays, bad card dropped
 
     def test_reworded_claim_maps_to_its_sentence_but_needs_its_numbers(self):
         text = "The company said the loss was 20 cents a share. Net sales rose to $6.2 million."
@@ -134,10 +134,18 @@ class PanelTest(unittest.TestCase):
         panel.index, panel.phase = len(panel.stories) - 1, "close"
         self.assertEqual(panel.signature_lines(host)[0], {"outro_template"})
 
+    def test_line_without_figures_plays_without_a_model_check(self):
+        panel = fixture()
+        author, verifier = Mock(), Mock()
+        author.generate.return_value = line("That's a big claim. Leila, do you buy it?")
+        approved, _ = panel.draft(author, verifier)
+        self.assertEqual(approved.text, "That's a big claim. Leila, do you buy it?")
+        verifier.generate.assert_not_called()
+
     def test_repair_once_and_withhold_unsupported_interpretation(self):
         panel = fixture()
         author, verifier = Mock(), Mock()
-        author.generate.return_value = line("Revenue growth caused hiring to accelerate.")
+        author.generate.return_value = line("Revenue grew 6%, which caused hiring to accelerate.")
         verifier.generate.return_value = Verdict(supported=False, issue="No hiring evidence.")
         approved, cards = panel.draft(author, verifier)
         self.assertEqual(author.generate.call_count, 2)

@@ -7,7 +7,7 @@
    rest. Too little: ask the recommender for its next articles (excluding everything already listed) and fit again,
    until the length is filled or nothing new comes back; then the plan is shorter and says so.
 3. Personas: the recommender's ordering for this listener (mostly their past preferences).
-4. Tones and hosts, without an LLM: each article's tone is preset in articles.tone. Hosts = the first 1 (presenter)
+4. Tones and hosts, without an LLM: each article's tone is preset in articles.desired_tone. Hosts = the first 1 (presenter)
    or 2 (debate) personas in our order whose humor suits the most sensitive tone in the plan (MAX_HUMOR).
 """
 
@@ -20,13 +20,14 @@ from recommender.embeddings import from_pgvector
 from recommender.hosts import host_affinity, rank_hosts
 from recommender.focus import parse_focus
 from recommender.recommend import Article, _Index, load_listener, recommend
+from research.matcher import ARTICLE_TONES
 
 logger = logging.getLogger(__name__)
 
 EXTEND_ROUNDS = 3
 EXTEND_BATCH = 30           # articles asked from the recommender per extension round
 # A host whose humor_level (1-5) is above this never presents a plan with a story in that tone: no jokes on a death.
-MAX_HUMOR = {"somber": 2, "serious": 3}
+MAX_HUMOR = {"somber": 2, "serious": 3, "cautious": 4}
 
 
 class UnknownSelectedArticles(ValueError):
@@ -87,17 +88,21 @@ def _pace(conn, persona_ids: list[str]) -> float:
 
 
 def load_tones(conn, ids: list[str]) -> dict[str, str]:
-    """Preset tone per article (articles.tone). Articles without one are left out; the hosts then deliver neutrally."""
+    """Preset tone per article (articles.desired_tone). Articles without a known tone (tones.json) are left out; the
+    hosts then deliver them neutrally."""
     if not ids:
         return {}
     try:
         with conn.transaction():  # savepoint: a database without the column yet must not break the plan
-            rows = conn.execute("select id, tone from public.articles where id = any(%s) and tone is not null",
-                                (ids,)).fetchall()
+            rows = conn.execute("select id, desired_tone from public.articles "
+                                "where id = any(%s) and desired_tone is not null", (ids,)).fetchall()
     except psycopg.errors.UndefinedColumn:
-        logger.warning("public.articles.tone is missing; planning without tones")
+        logger.warning("public.articles.desired_tone is missing; planning without tones")
         return {}
-    return dict(rows)
+    unknown = {tone for _, tone in rows if tone not in ARTICLE_TONES}
+    if unknown:
+        logger.warning("Ignoring tones missing from tones.json: %s", ", ".join(sorted(unknown)))
+    return {i: tone for i, tone in rows if tone in ARTICLE_TONES}
 
 
 def pick_hosts(conn, ranked: list[str], tones: dict[str, str], n: int) -> list[str]:

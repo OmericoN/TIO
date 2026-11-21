@@ -199,6 +199,7 @@ def eleven(path, body):
 VOICE_SETTINGS = {
     "somber": {"stability": 0.8, "style": 0.0},
     "serious": {"stability": 0.65, "style": 0.1},
+    "cautious": {"stability": 0.6, "style": 0.15},
     "analytical": {"stability": 0.55, "style": 0.2},
     "neutral": {"stability": 0.5, "style": 0.3},
     "upbeat": {"stability": 0.35, "style": 0.55},
