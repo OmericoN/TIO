@@ -202,11 +202,11 @@ def visual_problem(visual, cards, pictures):
 
 
 def tidy(visual):
-    """A flow's arrows mean "then", so its title can't promise causes: "Why X rose" becomes "X rose: what happened"."""
+    """A flow's steps mean "then", so its title can't promise causes: "Why X rose" becomes "X rose: step by step"."""
     title = visual.title.strip()
     if visual.kind == "flow" and re.match(r"(?i)why\b", title):
         rest = re.sub(r"(?i)^why\s+(did\s+|does\s+|is\s+|are\s+)?", "", title).rstrip("?")
-        title = f"{rest[:1].upper()}{rest[1:]}: what happened" if rest else "What happened"
+        title = f"{rest[:1].upper()}{rest[1:]}: step by step" if rest else "Step by step"
     return visual.model_copy(update={"title": title})
 
 

@@ -647,7 +647,7 @@ class VisualTest(unittest.TestCase):
                          "maps show places on Earth only")
         flow = self.visual("flow", flow=[visuals.FlowStep(label="Net sales", card_id="1.1")] * 2)
         self.assertEqual(visuals.tidy(flow.model_copy(update={"title": "Why SpaceX stock rose Tuesday"})).title,
-                         "SpaceX stock rose Tuesday: what happened")
+                         "SpaceX stock rose Tuesday: step by step")
 
     def test_figures_are_listed_with_their_units_for_charts(self):
         from discussion import visuals
