@@ -43,7 +43,6 @@ export function NewsWorkspace({ owner, onboarding, listenerId }: { owner: string
   const [feedError, setFeedError] = useState('')
   const [view, setView] = useState<'feed' | 'briefings' | 'profile'>('feed')
   const [stories, setStories] = useState<Headline[]>([])
-  const [sample, setSample] = useState(true)
   const [historyVersion, setHistoryVersion] = useState(0)
   const [online, setOnline] = useState(false)
   const [savedSettings] = useState(() => loadSettings(owner))
@@ -105,7 +104,6 @@ export function NewsWorkspace({ owner, onboarding, listenerId }: { owner: string
           if (controller.signal.aborted) return
           feed.current = headlines
           setStories(headlines)
-          setSample(false)
           setRecorded(false)
         } else {
           const catalog = await requestJson<{ sample: boolean; stories: Headline[] }>('/api/panel/stories',
@@ -114,14 +112,13 @@ export function NewsWorkspace({ owner, onboarding, listenerId }: { owner: string
           if (!Array.isArray(catalog.stories)) throw new Error('The story catalog is unavailable.')
           feed.current = catalog.sample ? sampleHeadlines : catalog.stories
           setStories(feed.current)
-          setSample(catalog.sample)
           setRecorded(catalog.sample && (savedSettings?.recorded ?? true))
         }
         setOnline(true)
       } catch (error) {
         if (controller.signal.aborted) return
         if (userId) setFeedError(error instanceof Error ? error.message : 'Recommendations could not be loaded.')
-        else { feed.current = sampleHeadlines; setStories(sampleHeadlines); setSample(true); setRecorded(true) }
+        else { feed.current = sampleHeadlines; setStories(sampleHeadlines); setRecorded(true) }
       }
     }
     void load()
@@ -336,7 +333,7 @@ export function NewsWorkspace({ owner, onboarding, listenerId }: { owner: string
         </section>
       </>}
     </section>
-    {launch && <Suspense fallback={<p className="session-loading" role="status">Opening briefing…</p>}><PanelPlayer owner={owner} stories={launch.lineup} listener={launch.listener} preferences={preferences} recorded={recorded} canGenerateSample={sample && online} origin={launch} onClose={() => {
+    {launch && <Suspense fallback={<p className="session-loading" role="status">Opening briefing…</p>}><PanelPlayer owner={owner} stories={launch.lineup} listener={launch.listener} preferences={preferences} recorded={recorded} origin={launch} onClose={() => {
       if (launch.context && launch.context.state !== 'closed') void launch.context.close().catch(() => {})
       setHistoryVersion(v => v + 1)
       setLaunch(null)

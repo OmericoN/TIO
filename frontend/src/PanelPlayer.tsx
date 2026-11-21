@@ -66,7 +66,6 @@ type Props = {
   stories: Headline[]
   preferences: Preferences
   recorded: boolean
-  canGenerateSample: boolean
   origin: { x: number; y: number; context: AudioContext | null }
   // A signed-in listener: the briefing is planned from their recommended feed and picks once they confirm.
   listener?: { id: string; articleIds: string[]; selectedIds: string[] }
@@ -80,11 +79,10 @@ async function postJson<T>(url: string, body: object): Promise<T> {
   return result
 }
 
-export function PanelPlayer({ owner, stories: chosenStories, preferences, recorded: recordedDefault, canGenerateSample, origin, listener, onClose }: Props) {
+export function PanelPlayer({ owner, stories: chosenStories, preferences, recorded, origin, listener, onClose }: Props) {
   // The agenda: the chosen headlines, replaced by the planned lineup for a signed-in listener.
   const [stories, setStories] = useState<Headline[]>(chosenStories.length ? chosenStories
     : [{ id: 'planning', title: 'Your briefing', topic: '', summary: '' }])
-  const [recorded, setRecorded] = useState(recordedDefault)
   const [running, setRunning] = useState(true)
   const [status, setStatus] = useState('')
   const [phase, setPhase] = useState<'setup' | 'confirming' | 'playing'>('setup')
@@ -795,17 +793,12 @@ export function PanelPlayer({ owner, stories: chosenStories, preferences, record
       </AgentStage>
       <div ref={consolePanel} className="session-console">
       <p role="status" className="player-status">{status}</p>
-      {phase === 'setup' && (canGenerateSample || !recorded) && <div className="briefing-setup-options">
-        {canGenerateSample && <label className="field">Playback
-          <select value={recorded ? 'sample' : 'live'} onChange={event => setRecorded(event.target.value === 'sample')}>
-            <option value="sample">Recorded sample</option><option value="live">Generate a personal briefing</option>
-          </select>
-        </label>}
-        {!recorded && <label className="field">Format
+      {phase === 'setup' && !recorded && <div className="briefing-setup-options">
+        <label className="field">Format
           <select value={mode} onChange={event => setMode(event.target.value as Preferences['mode'])}>
             <option value="panel">Expert panel</option><option value="presenter">Presenter</option>
           </select>
-        </label>}
+        </label>
       </div>}
       {phase !== 'playing' && <p className="setup-note">{recorded ? 'Recorded preview · fixed audio and two experts. Dial settings apply to generated briefings.'
         : mode === 'presenter' ? 'Presenter mode · host only. Adjust the lower arc to switch to an expert panel.'

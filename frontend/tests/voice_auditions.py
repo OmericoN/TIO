@@ -21,7 +21,7 @@ def open_voices(page):
     expect(page.get_by_label('Preferred listening time', exact=True)).to_have_count(0)
     page.get_by_label('Technology', exact=True).check()
     page.get_by_role('button', name='Continue', exact=True).click()
-    expect(page.get_by_role('heading', name='Pick your favorite voices')).to_be_visible()
+    expect(page.get_by_role('heading', name='Pick up to three favorite voices')).to_be_visible()
     expect(page.locator('#login-title .brand')).to_have_css('font-size', '43px')
 
 
@@ -129,7 +129,15 @@ with sync_playwright() as p:
     page = browser.new_page(viewport={'width': 537, 'height': 770}, reduced_motion='reduce')
     page.route('**/api/voice/catalog', lambda route: route.fulfill(json=VOICES))
     page.route('**/api/voice/catalog/*/preview', lambda route: route.fulfill(json={'url': '/voices/rates-open.wav'}))
-    page.route('**/api/panel/stories', lambda route: route.fulfill(json={'sample': True, 'stories': []}))
+    page.route('**/api/profile/embed', lambda route: route.fulfill(status=204))
+    page.route('**/api/recommend/catalog', lambda route: route.fulfill(json={'users': []}))
+    page.route('**/api/recommend', lambda route: route.fulfill(json={'article_ids': ['story']}))
+    page.route('**/api/recommend/lookup', lambda route: route.fulfill(json={
+        'story': {'headline': 'A briefing topic', 'publication': 'Sample Markets', 'language': 'en'},
+    }))
+    page.route('**/api/briefing/generate', lambda route: route.fulfill(json={
+        'segments': [{'article_ids': ['story']}], 'hosts': [], 'tones': {},
+    }))
 
     def sign_in(route):
         email = route.request.post_data_json['email']
@@ -176,7 +184,6 @@ with sync_playwright() as p:
     page.get_by_role('button', name='News feed', exact=True).click()
     page.get_by_role('button', name='Select article:', exact=False).first.click()
     page.get_by_role('button', name='Start agent discussion').click()
-    page.get_by_label('Playback').select_option('live')
     page.route('**/api/panel', lambda route: route.fulfill(status=503, json={'detail': 'Test endpoint reached'}))
     with page.expect_request('**/api/panel') as start:
         page.get_by_role('button', name='Begin briefing').click()

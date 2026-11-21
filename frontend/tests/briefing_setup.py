@@ -2,15 +2,9 @@
 
 All panel requests are mocked; this check makes no provider calls.
 """
-import base64
-import json
 import math
-from pathlib import Path
 
 from playwright.sync_api import expect, sync_playwright
-
-AUDIO = base64.b64encode((Path(__file__).parents[1] / 'public/voices/rates-open.wav').read_bytes()).decode()
-
 
 def point(slider, angle, lower=False):
     rect = slider.bounding_box()
@@ -25,6 +19,7 @@ with sync_playwright() as p:
         page = browser.new_page(viewport={'width': width, 'height': 850}, reduced_motion='reduce', has_touch=width == 320)
         starts, turns, errors = [], [], []
         page.on('pageerror', lambda e: errors.append(str(e)))
+        page.route('**/api/recommend/catalog', lambda r: r.fulfill(json={'users': []}))
         page.route('**/api/panel/stories', lambda r: r.fulfill(json={'sample': False, 'stories': [
             {'id': 'story', 'title': 'A briefing topic', 'summary': 'Test summary', 'topic': 'Economy'}]}))
 
@@ -35,15 +30,25 @@ with sync_playwright() as p:
         def turn(route):
             turns.append(route.request.post_data_json)
             names = ['Expert One', 'Expert Two', 'Expert Three', 'Expert Four']
-            route.fulfill(content_type='application/x-ndjson', body=json.dumps({'result': {
-                'id': 'opening', 'story_id': 'story', 'story': 'A briefing topic', 'speaker': 'Host', 'host': 'Host',
-                'guests': names, 'text': '. '.join(names) + '. Welcome to the panel.', 'sources': [], 'audio': AUDIO,
-            }}) + '\n')
+            route.fulfill(json={
+                'id': 'opening', 'story_id': 'story', 'story': 'A briefing topic', 'speaker': 'Host',
+                'speaker_id': 'host', 'guests': names, 'brief': 'Welcome to the panel.', 'sources': [], 'max_seconds': 8,
+            })
 
         page.route('**/api/panel', start)
-        page.route('**/api/panel/test/events', turn)
+        page.route('**/api/panel/test/realtime/agents', lambda r: r.fulfill(json={
+            'model': 'test', 'agents': [{'id': 'host', 'name': 'Host', 'role': 'host', 'voice': 'test'}],
+        }))
+        page.route('**/api/panel/test/realtime/next', turn)
+        page.route('**/api/panel/test/holding', lambda r: r.fulfill(status=404))
         page.route('**/api/panel/test', lambda r: r.fulfill(status=204))
         page.goto('http://localhost:5173/demo')
+        page.evaluate("""async () => {
+          const { RealtimeAgent } = await import('/src/realtime.ts');
+          RealtimeAgent.connect = async info => ({
+            info, speak: () => new Promise(() => {}), close() {},
+          });
+        }""")
         select_article = page.get_by_role('button', name='Select article: A briefing topic')
         if width == 320:
             card = page.locator('.selectable-stories article')
@@ -106,23 +111,14 @@ with sync_playwright() as p:
         experts.press('End')
         assert page.locator('.session-inner').evaluate('e => e.scrollWidth <= e.clientWidth')
         page.get_by_role('button', name='Begin briefing').click()
-        page.wait_for_function("document.querySelector('dialog audio')?.duration > 0")
+        expect(page.get_by_role('list', name='Topic checkpoints')).to_be_visible()
         assert len(starts) == len(turns) == 1
         assert starts[0]['minutes'] == 7 and starts[0]['expert_count'] == 4
         assert starts[0]['story_ids'] == ['story']
-        expect(page.get_by_role('list', name='Topic checkpoints')).to_be_visible()
         expect(page.locator('.checkpoint-title')).to_have_count(0)
         expect(page.locator('.session-headline')).to_have_text('A briefing topic')
         expect(page.get_by_role('group', name='Briefing setup')).to_have_count(0)
-        page.evaluate("const audio = document.querySelector('dialog audio'); audio.currentTime = audio.duration * .8")
         expect(page.locator('.guest')).to_have_count(4)
-        page.get_by_role('button', name='Pause briefing').click()
-        expect(controls.get_by_role('button', name='Play briefing')).to_be_enabled()
-        assert page.locator('dialog audio').evaluate('e => e.paused')
-        expect(page.get_by_role('list', name='Topic checkpoints')).to_be_visible()
-        controls.get_by_role('button', name='Play briefing').click()
-        expect(controls.get_by_role('button', name='Pause briefing')).to_be_visible()
-        controls.get_by_role('button', name='Pause briefing').click()
         actors = [node.bounding_box() for node in page.locator('.actor .orb-meter').all()]
         for i, a in enumerate(actors):
             assert a['x'] >= 0 and a['x'] + a['width'] <= width
@@ -131,12 +127,13 @@ with sync_playwright() as p:
         controls.get_by_role('button', name='Stop briefing').click()
         expect(page.get_by_role('button', name='Start agent discussion')).to_be_focused()
         assert not errors, errors
-        print(f'{width}px: silent setup, keyboard, arc drag, parameters, playback and four-expert layout passed', flush=True)
+        print(f'{width}px: silent setup, keyboard, arc drag, realtime request and four-expert layout passed', flush=True)
         page.close()
 
     for preview in (True, False):
         page = browser.new_page(viewport={'width': 524, 'height': 770}, reduced_motion='reduce')
         starts = []
+        page.route('**/api/recommend/catalog', lambda r: r.fulfill(json={'users': []}))
         page.route('**/api/panel/stories', lambda r: r.fulfill(json={'sample': preview, 'stories': [
             {'id': 'story', 'title': 'A briefing topic', 'summary': 'Test summary', 'topic': 'Economy'}]}))
 
@@ -149,10 +146,9 @@ with sync_playwright() as p:
         expect(page.locator('.story-grid article')).to_have_count(2 if preview else 1)
         page.get_by_role('button', name='Select article:', exact=False).first.click()
         page.get_by_role('button', name='Start agent discussion').click()
+        expect(page.get_by_label('Playback')).to_have_count(0)
         if preview:
-            page.get_by_label('Playback').select_option('live')
-            expect(page.get_by_label('Format')).to_be_visible()
-            page.get_by_label('Playback').select_option('sample')
+            expect(page.get_by_label('Format')).to_have_count(0)
         else:
             page.get_by_label('Format').select_option('presenter')
         slider = page.get_by_role('slider', name='Expert participants')
@@ -171,6 +167,11 @@ with sync_playwright() as p:
         page.get_by_role('button', name='Begin briefing').click()
         if preview:
             page.wait_for_function("document.querySelector('dialog audio')?.duration > 0")
+            controls = page.get_by_role('group', name='Briefing controls')
+            controls.get_by_role('button', name='Pause briefing').click()
+            assert page.locator('dialog audio').evaluate('e => e.paused')
+            controls.get_by_role('button', name='Play briefing').click()
+            expect(controls.get_by_role('button', name='Pause briefing')).to_be_visible()
             assert starts == []
         else:
             expect(page.get_by_role('dialog').get_by_role('status')).to_have_text('Test endpoint reached')
@@ -182,6 +183,7 @@ with sync_playwright() as p:
     for cancel in (True, False):
         page = browser.new_page(viewport={'width': 524, 'height': 770}, reduced_motion='no-preference')
         starts = []
+        page.route('**/api/recommend/catalog', lambda r: r.fulfill(json={'users': []}))
         page.route('**/api/panel/stories', lambda r: r.fulfill(json={'sample': False, 'stories': [
             {'id': 'story', 'title': 'A briefing topic', 'summary': 'Test summary', 'topic': 'Economy'}]}))
 
