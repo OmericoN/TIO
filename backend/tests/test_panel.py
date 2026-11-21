@@ -638,6 +638,23 @@ class VisualTest(unittest.TestCase):
         self.assertIsNone(self.problem(self.visual("map", places=[place("Hauppauge, New York")])))
         self.assertIn("not named", self.problem(self.visual("map", places=[place("Chicago")])))
 
+    def test_maps_are_earth_only_and_flows_dont_promise_causes(self):
+        from discussion import visuals
+        mars = [{"id": "1.1", "point": "Curiosity found sulphur at Gediz Vallis on Mars", "status": "reported",
+                 "sources": [{"publisher": "NASA", "quote": "Gediz Vallis channel"}]}]
+        place = visuals.MapPlace(name="Gediz Vallis", latitude=-4.6, longitude=137.4, card_id="1.1")
+        self.assertEqual(visuals.visual_problem(self.visual("map", places=[place]), mars, {}),
+                         "maps show places on Earth only")
+        flow = self.visual("flow", flow=[visuals.FlowStep(label="Net sales", card_id="1.1")] * 2)
+        self.assertEqual(visuals.tidy(flow.model_copy(update={"title": "Why SpaceX stock rose Tuesday"})).title,
+                         "SpaceX stock rose Tuesday: what happened")
+
+    def test_figures_are_listed_with_their_units_for_charts(self):
+        from discussion import visuals
+        figures = visuals.card_figures(self.cards[1])
+        self.assertIn({"value": 27.1, "unit": "$ billion"}, [{k: f[k] for k in ("value", "unit")} for f in figures])
+        self.assertEqual(visuals.plain(20240500.0), "20240500")
+
     def test_pictures_are_only_the_storys_own_photos(self):
         photos = {"a1": {"url": "https://x/p.jpg", "publisher": "Zacks", "headline": "H"}}
         self.assertIsNone(self.problem(self.visual("picture", picture_article_id="a1"), photos))

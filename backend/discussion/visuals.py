@@ -72,13 +72,15 @@ The listener has a screen. Like a TV producer, put something on it whenever it h
 pick the kind that fits:
 - picture: the story's own article photo, from pictures. Good for the turn that opens a story.
 - chart: two to six figures measuring the same kind of thing in one unit: all growth rates, all prices, one
-  measure before and after, or outlets' different numbers for the same measure. Never put different measures on
-  one chart (rate-hike odds, inflation and bond yields together), never mix units, never compute values.
+  measure before and after, or outlets' different numbers for the same measure. Pick every value from the cards'
+  figures list, all with the same unit, copying the value exactly. Never put different measures on one chart
+  (rate-hike odds, inflation and bond yields together), never convert, round further or compute values.
 - flow: a process, a timeline, a supply chain or a cause and effect chain in two to six short steps, each taken
   from a card. Arrows read as "then", not "causes": only call it a chain of causes, or title it "Why…", when the
   cards themselves say one step caused the next. A timeline is titled as one ("What happened", "What's next").
-- map: when places matter (a plant, a deal, a disaster, an election, a trade route): one to six places named on
-  the cards, with their real coordinates.
+- map: when places on Earth matter (a plant, a deal, a disaster, an election, a trade route): one to six places
+  named on the cards, with their real coordinates. Not for space stories, and not when the place is just a
+  company's home country.
 Every value, step and place must come from the fact cards.
 visual_expected says what this turn's slot is: follow it. "chart, flow or map" means pick whichever of the three
 the cards support best (numbers → chart, a sequence or cause and effect → flow, places → map); return null only
@@ -88,12 +90,44 @@ listed in visuals_shown_this_story, and vary the kinds within a story."""
 
 # A figure with its currency and unit; short forms ("1.1m", "$27bn", "500k") count, and the unit must end the word,
 # so "3 months" isn't read as millions.
+OFF_EARTH = re.compile(r"\b(mars|martian|moon|lunar|jupiter|venus|saturn|mercury|asteroid|orbit|crater|space station)\b",
+                       re.IGNORECASE)
 FIGURE = re.compile(r"(\$|€|£)?\s?(\d[\d,]*(?:\.\d+)?)\s?(%|percent|per cent|trillion|billion|million|thousand|bn|tn|"
                     r"cents?|basis points|bps|points?|m|b|k)?(?![a-z])", re.IGNORECASE)
 
 
 def evidence(card):
     return " ".join([card["point"], *(s["quote"] for s in card["sources"])])
+
+
+def plain(value):
+    """A figure as plain digits: 20240500, not 2.02405e+07."""
+    return format(Decimal(repr(value)).normalize(), "f")
+
+
+def unit_of(currency, suffix):
+    suffix = (suffix or "").lower()
+    suffix = {"percent": "%", "per cent": "%", "bn": "billion", "b": "billion", "tn": "trillion", "m": "million",
+              "k": "thousand", "cent": "cents", "bps": "basis points", "point": "points"}.get(suffix, suffix)
+    return " ".join(part for part in (currency, suffix) if part)
+
+
+def card_figures(card):
+    """Every figure written on a card, with its unit and the words around it, so charts are picked from real
+    figures instead of retyped (which invites conversions and unit mix-ups)."""
+    text = " ".join(evidence(card).split())
+    found = {}
+    for match in FIGURE.finditer(text):
+        currency, number, suffix = match.groups()
+        try:
+            value = float(number.replace(",", ""))
+        except ValueError:
+            continue
+        if 1900 <= value <= 2100 and not (currency or suffix):
+            continue  # a year, not a figure to chart
+        context = text[max(0, match.start() - 60):match.end() + 25].strip()
+        found.setdefault((value, unit_of(currency, suffix)), context)
+    return [{"value": value, "unit": unit, "text": f"…{context}…"} for (value, unit), context in found.items()][:12]
 
 
 def figure_units(value, text):
@@ -104,12 +138,8 @@ def figure_units(value, text):
             quoted = Decimal(number.replace(",", ""))
         except InvalidOperation:
             continue
-        if rounds_to(quoted, Decimal(f"{value:g}")):
-            suffix = (suffix or "").lower()
-            suffix = {"percent": "%", "per cent": "%", "bn": "billion", "b": "billion", "tn": "trillion",
-                      "m": "million", "k": "thousand", "cent": "cents", "bps": "basis points",
-                      "point": "points"}.get(suffix, suffix)
-            units.add(" ".join(part for part in (currency, suffix) if part))
+        if rounds_to(quoted, Decimal(plain(value))):
+            units.add(unit_of(currency, suffix))
     return units
 
 
@@ -122,8 +152,8 @@ def chart_problem(chart, cards):
         return f"{len(chart.points)} points"
     for point in chart.points:
         card = by_id.get(point.card_id)
-        if not (card and figures_supported(f"{point.value:g}", evidence(card))):
-            return f"{point.value:g} not on card {point.card_id}"
+        if not (card and figures_supported(plain(point.value), evidence(card))):
+            return f"{plain(point.value)} not on card {point.card_id}"
     # One axis, one unit: each value must carry the same unit in its source text ("$27.1 billion" and "5.6%" can't
     # share a chart).
     shared = None
@@ -155,6 +185,9 @@ def visual_problem(visual, cards, pictures):
         places = visual.places or []
         if not 1 <= len(places) <= 6:
             return f"{len(places)} places"
+        if (OFF_EARTH.search(visual.title) or any(OFF_EARTH.search(p.name) for p in places)
+                or any(p.card_id in by_id and OFF_EARTH.search(evidence(by_id[p.card_id])) for p in places)):
+            return "maps show places on Earth only"  # e.g. a Mars crater plotted on a world map
         for place in places:
             card = by_id.get(place.card_id)
             name = place.name.split(",")[0].strip().casefold()
@@ -168,6 +201,15 @@ def visual_problem(visual, cards, pictures):
     return f"unknown kind {visual.kind}"
 
 
+def tidy(visual):
+    """A flow's arrows mean "then", so its title can't promise causes: "Why X rose" becomes "X rose: what happened"."""
+    title = visual.title.strip()
+    if visual.kind == "flow" and re.match(r"(?i)why\b", title):
+        rest = re.sub(r"(?i)^why\s+(did\s+|does\s+|is\s+|are\s+)?", "", title).rstrip("?")
+        title = f"{rest[:1].upper()}{rest[1:]}: what happened" if rest else "What happened"
+    return visual.model_copy(update={"title": title})
+
+
 def checked_visual(visual, cards, pictures):
     """The visual if it passes its checks, else None (logged)."""
     if visual is None:
@@ -176,7 +218,7 @@ def checked_visual(visual, cards, pictures):
     if problem:
         log.warning("Visual dropped (%s): %s %r", problem, visual.kind, visual.title)
         return None
-    return visual
+    return tidy(visual)
 
 
 @lru_cache(maxsize=256)
@@ -257,12 +299,12 @@ def for_listener(panel, request, cards):
     """A visual the listener asked for, from the current story, or None when the reporting can't support one."""
     pictures = story_pictures(panel.story)
     data = {"listener_request": request, "headline": panel.story.headline,
-            "fact_cards": [{"id": c["id"], "point": c["point"], "quotes": [s["quote"][:300] for s in c["sources"]]}
-                           for c in cards],
+            "fact_cards": [{"id": c["id"], "point": c["point"], "quotes": [s["quote"][:300] for s in c["sources"]],
+                            "figures": card_figures(c)} for c in cards],
             "pictures": [{"article_id": i, "publisher": p["publisher"], "headline": p["headline"]}
                          for i, p in pictures.items()][:4],
             "visuals_shown_this_story": panel.visuals_shown.get(panel.story.id, [])}
-    for _ in range(2):
+    for _ in range(3):
         answer = model().generate("listener_visual", GUIDE + """
 
 The listener just asked to see something. Give them the kind they asked for when the reporting supports it (map for
@@ -273,7 +315,7 @@ data.""", data, VisualAnswer)
             return None
         problem = visual_problem(answer.visual, cards, pictures)
         if problem is None:
-            return answer.visual
+            return tidy(answer.visual)
         data["rejected_visual"] = problem
         log.warning("Listener visual refused (%s), retrying", problem)
     return None

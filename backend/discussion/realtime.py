@@ -281,7 +281,8 @@ def make_brief(panel):
                                 if i not in panel.guest_turns and i != speaker],
         "story_tone": panel.story_tone(),
         "fact_cards": [{**{k: c[k] for k in ("id", "point", "status")},
-                        "quotes": [s["quote"][:300] for s in c["sources"]]} for c in cards],
+                        "quotes": [s["quote"][:300] for s in c["sources"]],
+                        "figures": visuals.card_figures(c)} for c in cards],
         "mode": "panel" if panel.roster else "presenter",
         "pictures": [{"article_id": i, "publisher": p["publisher"], "headline": p["headline"]}
                      for i, p in pictures.items()][:4],
